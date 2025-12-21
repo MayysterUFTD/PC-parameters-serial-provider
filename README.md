@@ -2,20 +2,20 @@
 
 A Windows system tray application that monitors hardware sensors using LibreHardwareMonitor and sends data via COM port in JSON format.
 
-![. NET](https://img.shields.io/badge/. NET-10. 0-purple)
+![.NET](https://img.shields.io/badge/.NET-10.0-purple)
 ![Platform](https://img.shields.io/badge/Platform-Windows-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
 ## Features
 
-- 🖥️ **System Tray Application** - Runs quietly in the background
-- 📊 **Comprehensive Hardware Monitoring** - CPU, GPU, RAM, Motherboard, Storage, Network, PSU, Battery
-- 🔌 **COM Port Communication** - Sends JSON data to any available serial port
-- ⚙️ **Configurable Sensors** - Select which sensors to monitor
-- 🔍 **Search & Filter** - Quickly find sensors by name, hardware, or type
-- ⏱️ **Adjustable Interval** - Set data transmission rate (100ms - 60s)
-- 🚀 **Auto-start Options** - Start monitoring on launch, start with Windows
-- 💾 **Persistent Configuration** - Settings saved automatically
+- **System Tray Application** - Runs quietly in the background
+- **Comprehensive Hardware Monitoring** - CPU, GPU, RAM, Motherboard, Storage, Network, PSU, Battery
+- **COM Port Communication** - Sends JSON data to any available serial port
+- **Configurable Sensors** - Select which sensors to monitor
+- **Search & Filter** - Quickly find sensors by name, hardware, or type
+- **Adjustable Interval** - Set data transmission rate (100ms - 60s)
+- **Auto-start Options** - Start monitoring on launch, start with Windows
+- **Persistent Configuration** - Settings saved automatically
 
 ## Requirements
 
