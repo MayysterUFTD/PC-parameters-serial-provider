@@ -23,7 +23,6 @@ namespace HardwareMonitorTray
             _monitorService = new HardwareMonitorService();
             _serialService = new SerialPortService();
 
-            // Konfiguracja JSON z obsługą Infinity i NaN
             _jsonOptions = new JsonSerializerOptions
             {
                 NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals,
@@ -43,16 +42,16 @@ namespace HardwareMonitorTray
         {
             _contextMenu = new ContextMenuStrip();
             _contextMenu.Items.Add("Start/Stop", null, OnStartStopClick);
-            _contextMenu.Items.Add("Ustawienia", null, OnSettingsClick);
+            _contextMenu.Items.Add("Settings", null, OnSettingsClick);
             _contextMenu.Items.Add("-");
-            _contextMenu.Items.Add("Wyjście", null, OnExitClick);
+            _contextMenu.Items.Add("Exit", null, OnExitClick);
 
             _trayIcon = new NotifyIcon()
             {
                 Icon = SystemIcons.Application,
                 ContextMenuStrip = _contextMenu,
                 Visible = true,
-                Text = "Hardware Monitor - Zatrzymany"
+                Text = "Hardware Monitor - Stopped"
             };
 
             _trayIcon.DoubleClick += OnSettingsClick;
@@ -75,7 +74,7 @@ namespace HardwareMonitorTray
             }
             catch (Exception ex)
             {
-                _trayIcon.ShowBalloonTip(3000, "Błąd", ex.Message, ToolTipIcon.Error);
+                _trayIcon.ShowBalloonTip(3000, "Error", ex.Message, ToolTipIcon.Error);
             }
         }
 
@@ -86,12 +85,12 @@ namespace HardwareMonitorTray
                 _serialService.Connect(_configManager.Config.ComPort, _configManager.Config.BaudRate);
                 _sendTimer.Start();
                 _isRunning = true;
-                _trayIcon.Text = $"Hardware Monitor - Aktywny ({_configManager.Config.ComPort})";
+                _trayIcon.Text = $"Hardware Monitor - Active ({_configManager.Config.ComPort})";
                 _trayIcon.Icon = SystemIcons.Shield;
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Nie można uruchomić:  {ex.Message}", "Błąd",
+                MessageBox.Show($"Failed to start:  {ex.Message}", "Error",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
@@ -101,7 +100,7 @@ namespace HardwareMonitorTray
             _sendTimer.Stop();
             _serialService.Disconnect();
             _isRunning = false;
-            _trayIcon.Text = "Hardware Monitor - Zatrzymany";
+            _trayIcon.Text = "Hardware Monitor - Stopped";
             _trayIcon.Icon = SystemIcons.Application;
         }
 

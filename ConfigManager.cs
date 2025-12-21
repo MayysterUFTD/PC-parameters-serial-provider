@@ -1,5 +1,5 @@
 using System;
-using System.Collections. Generic;
+using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using Microsoft.Win32;
@@ -26,12 +26,12 @@ namespace HardwareMonitorTray
 
         public ConfigManager()
         {
-            var appDataPath = Path. Combine(
+            var appDataPath = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                 "HardwareMonitorTray"
             );
             Directory.CreateDirectory(appDataPath);
-            _configPath = Path. Combine(appDataPath, "config. json");
+            _configPath = Path.Combine(appDataPath, "config.json");
 
             LoadConfig();
         }
@@ -59,7 +59,7 @@ namespace HardwareMonitorTray
         public void SaveConfig()
         {
             var options = new JsonSerializerOptions { WriteIndented = true };
-            var json = JsonSerializer. Serialize(Config, options);
+            var json = JsonSerializer.Serialize(Config, options);
             File.WriteAllText(_configPath, json);
 
             UpdateStartWithWindows();
@@ -76,6 +76,11 @@ namespace HardwareMonitorTray
                         if (Config.StartWithWindows)
                         {
                             var exePath = System.Reflection.Assembly.GetExecutingAssembly().Location;
+                            // For . NET 5+ single file apps, use Environment.ProcessPath
+                            if (string.IsNullOrEmpty(exePath) || exePath.EndsWith(".dll"))
+                            {
+                                exePath = Environment.ProcessPath;
+                            }
                             key.SetValue(AppName, $"\"{exePath}\"");
                         }
                         else

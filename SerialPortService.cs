@@ -1,10 +1,9 @@
 using System;
 using System.IO.Ports;
-using System.Text;
 
 namespace HardwareMonitorTray
 {
-    public class SerialPortService 
+    public class SerialPortService
     {
         private SerialPort _serialPort;
 

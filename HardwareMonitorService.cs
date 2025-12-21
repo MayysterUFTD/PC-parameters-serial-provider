@@ -13,6 +13,20 @@ namespace HardwareMonitorTray
         public string Type { get; set; }
         public float? Value { get; set; }
         public string Unit { get; set; }
+
+        /// <summary>
+        /// Checks if sensor matches the search query
+        /// </summary>
+        public bool MatchesSearch(string query)
+        {
+            if (string.IsNullOrWhiteSpace(query))
+                return true;
+
+            var searchTerms = query.ToLowerInvariant().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            var searchableText = $"{Name} {Hardware} {Type}".ToLowerInvariant();
+
+            return searchTerms.All(term => searchableText.Contains(term));
+        }
     }
 
     public class UpdateVisitor : IVisitor
@@ -71,6 +85,67 @@ namespace HardwareMonitorTray
             return sensors;
         }
 
+        /// <summary>
+        /// Gets all sensors filtered by search query
+        /// </summary>
+        public List<SensorInfo> SearchSensors(string query)
+        {
+            return GetAllSensors()
+                .Where(s => s.MatchesSearch(query))
+                .OrderBy(s => s.Hardware)
+                .ThenBy(s => s.Type)
+                .ThenBy(s => s.Name)
+                .ToList();
+        }
+
+        /// <summary>
+        /// Gets sensors filtered by type
+        /// </summary>
+        public List<SensorInfo> GetSensorsByType(string sensorType)
+        {
+            return GetAllSensors()
+                .Where(s => s.Type.Equals(sensorType, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(s => s.Hardware)
+                .ThenBy(s => s.Name)
+                .ToList();
+        }
+
+        /// <summary>
+        /// Gets sensors filtered by hardware name
+        /// </summary>
+        public List<SensorInfo> GetSensorsByHardware(string hardwareName)
+        {
+            return GetAllSensors()
+                .Where(s => s.Hardware.Contains(hardwareName, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(s => s.Type)
+                .ThenBy(s => s.Name)
+                .ToList();
+        }
+
+        /// <summary>
+        /// Gets list of all available sensor types
+        /// </summary>
+        public List<string> GetAvailableSensorTypes()
+        {
+            return GetAllSensors()
+                .Select(s => s.Type)
+                .Distinct()
+                .OrderBy(t => t)
+                .ToList();
+        }
+
+        /// <summary>
+        /// Gets list of all hardware names
+        /// </summary>
+        public List<string> GetAvailableHardware()
+        {
+            return GetAllSensors()
+                .Select(s => s.Hardware)
+                .Distinct()
+                .OrderBy(h => h)
+                .ToList();
+        }
+
         private void CollectSensors(IHardware hardware, List<SensorInfo> sensors)
         {
             foreach (var sensor in hardware.Sensors)
@@ -122,9 +197,6 @@ namespace HardwareMonitorTray
             return result;
         }
 
-        /// <summary>
-        /// Sprawdza czy wartość jest prawidłowa (nie jest NaN, Infinity)
-        /// </summary>
         private bool IsValidValue(float value)
         {
             return !float.IsNaN(value) && !float.IsInfinity(value);
