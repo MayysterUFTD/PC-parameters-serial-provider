@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Win32;
+using HardwareMonitorTray.Protocol;
 
 namespace HardwareMonitorTray
 {
@@ -14,6 +16,14 @@ namespace HardwareMonitorTray
         public bool AutoStart { get; set; } = false;
         public bool StartWithWindows { get; set; } = false;
         public List<string> SelectedSensors { get; set; } = new List<string>();
+
+        [JsonConverter(typeof(JsonStringEnumConverter))]
+        public ProtocolMode ProtocolMode { get; set; } = ProtocolMode.Binary;
+
+        [JsonConverter(typeof(JsonStringEnumConverter))]
+        public IconStyle IconStyle { get; set; } = IconStyle.Modern;
+
+        public bool FirstRun { get; set; } = true;  // Nowe pole
     }
 
     public class ConfigManager
@@ -43,7 +53,11 @@ namespace HardwareMonitorTray
                 try
                 {
                     var json = File.ReadAllText(_configPath);
-                    Config = JsonSerializer.Deserialize<AppConfig>(json) ?? new AppConfig();
+                    var options = new JsonSerializerOptions
+                    {
+                        Converters = { new JsonStringEnumConverter() }
+                    };
+                    Config = JsonSerializer.Deserialize<AppConfig>(json, options) ?? new AppConfig();
                 }
                 catch
                 {
@@ -58,7 +72,11 @@ namespace HardwareMonitorTray
 
         public void SaveConfig()
         {
-            var options = new JsonSerializerOptions { WriteIndented = true };
+            var options = new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                Converters = { new JsonStringEnumConverter() }
+            };
             var json = JsonSerializer.Serialize(Config, options);
             File.WriteAllText(_configPath, json);
 
@@ -69,24 +87,20 @@ namespace HardwareMonitorTray
         {
             try
             {
-                using (var key = Registry.CurrentUser.OpenSubKey(RegistryKeyPath, true))
+                using var key = Registry.CurrentUser.OpenSubKey(RegistryKeyPath, true);
+                if (key != null)
                 {
-                    if (key != null)
+                    if (Config.StartWithWindows)
                     {
-                        if (Config.StartWithWindows)
-                        {
-                            var exePath = System.Reflection.Assembly.GetExecutingAssembly().Location;
-                            // For . NET 5+ single file apps, use Environment.ProcessPath
-                            if (string.IsNullOrEmpty(exePath) || exePath.EndsWith(".dll"))
-                            {
-                                exePath = Environment.ProcessPath;
-                            }
+                        var exePath = Environment.ProcessPath ??
+                            System.Reflection.Assembly.GetExecutingAssembly().Location;
+
+                        if (!string.IsNullOrEmpty(exePath))
                             key.SetValue(AppName, $"\"{exePath}\"");
-                        }
-                        else
-                        {
-                            key.DeleteValue(AppName, false);
-                        }
+                    }
+                    else
+                    {
+                        key.DeleteValue(AppName, false);
                     }
                 }
             }
