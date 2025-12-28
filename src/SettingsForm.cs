@@ -5,7 +5,6 @@ using System.Linq;
 using System.Text;
 using System.Windows.Forms;
 using System.Collections.Generic;
-using System.Threading;
 using HardwareMonitorTray.Protocol;
 
 namespace HardwareMonitorTray
@@ -33,9 +32,11 @@ namespace HardwareMonitorTray
         private Label _cntLbl, _selLbl, _sizeLbl, _bwLbl, _loadLbl, _statusLbl;
         private ProgressBar _sizeBar;
         private PictureBox _iconPic;
-        private Button _saveBtn, _startStopBtn;
+        private Button _saveBtn, _startStopBtn, _helpBtn;
         private TrayIconManager _iconMgr;
         private System.Windows.Forms.Timer _uiTimer;
+        private System.Windows.Forms.Timer _previewAnimTimer;
+        private int _previewAnimFrame = 0;
 
         private Dictionary<string, byte> _sensorIdMap = new Dictionary<string, byte>();
         private byte _nextCustomId = 0x80;
@@ -54,9 +55,12 @@ namespace HardwareMonitorTray
 
             _mon.OnDataReady += OnSensorData;
 
-            // Wolniejszy timer = mniej blokowania
             _uiTimer = new System.Windows.Forms.Timer { Interval = 3000 };
             _uiTimer.Tick += OnUiTimerTick;
+
+            // Timer do animacji preview
+            _previewAnimTimer = new System.Windows.Forms.Timer { Interval = 500 };
+            _previewAnimTimer.Tick += (s, e) => { _previewAnimFrame++; UpdatePreview(); };
 
             Shown += OnFormShown;
         }
@@ -69,6 +73,7 @@ namespace HardwareMonitorTray
                 InitSensorList();
             }
             _uiTimer.Start();
+            _previewAnimTimer.Start();
             UpdateStartStopButton();
             UpdateStatusLabel();
         }
@@ -100,10 +105,7 @@ namespace HardwareMonitorTray
 
             if (!_init)
             {
-                try
-                {
-                    BeginInvoke((Action)InitSensorList);
-                }
+                try { BeginInvoke((Action)InitSensorList); }
                 catch { }
             }
         }
@@ -127,10 +129,7 @@ namespace HardwareMonitorTray
             var counters = new Dictionary<string, int>();
 
             List<SensorInfo> sensors;
-            lock (_lockObj)
-            {
-                sensors = new List<SensorInfo>(_sensors);
-            }
+            lock (_lockObj) { sensors = new List<SensorInfo>(_sensors); }
 
             foreach (var sensor in sensors)
             {
@@ -206,30 +205,94 @@ namespace HardwareMonitorTray
         private byte GetSensorId(SensorInfo s) =>
             _sensorIdMap.TryGetValue(s.Id, out var id) ? id : (byte)0xFF;
 
+        /// <summary>
+        /// Generuje unikalną, czytelną nazwę dla sensora (do . h/. c)
+        /// </summary>
+        private string GetSensorEnumName(SensorInfo s)
+        {
+            var cat = GetCategory(s);
+            var hw = s.Hardware.ToLower();
+            var nm = s.Name.ToLower();
+            var tp = s.Type;
+
+            // Określ specyficzny suffix na podstawie nazwy
+            string suffix = "";
+
+            if (cat == "CPU")
+            {
+                if (nm.Contains("package")) suffix = "_PACKAGE";
+                else if (nm.Contains("tctl") || nm.Contains("tdie")) suffix = "_TDIE";
+                else if (nm.Contains("ccd1")) suffix = "_CCD1";
+                else if (nm.Contains("ccd2")) suffix = "_CCD2";
+                else if (nm.Contains("core #1") || nm.Contains("core 1")) suffix = "_CORE1";
+                else if (nm.Contains("core #2") || nm.Contains("core 2")) suffix = "_CORE2";
+                else if (nm.Contains("core #3") || nm.Contains("core 3")) suffix = "_CORE3";
+                else if (nm.Contains("core #4") || nm.Contains("core 4")) suffix = "_CORE4";
+                else if (nm.Contains("core #5") || nm.Contains("core 5")) suffix = "_CORE5";
+                else if (nm.Contains("core #6") || nm.Contains("core 6")) suffix = "_CORE6";
+                else if (nm.Contains("core #7") || nm.Contains("core 7")) suffix = "_CORE7";
+                else if (nm.Contains("core #8") || nm.Contains("core 8")) suffix = "_CORE8";
+                else if (nm.Contains("total")) suffix = "_TOTAL";
+                else if (nm.Contains("core")) suffix = "_CORES";
+            }
+            else if (cat == "GPU")
+            {
+                if (nm.Contains("hotspot") || nm.Contains("hot spot")) suffix = "_HOTSPOT";
+                else if (nm.Contains("memory") || nm.Contains("vram")) suffix = "_VRAM";
+                else if (nm.Contains("core")) suffix = "_CORE";
+                else if (nm.Contains("video")) suffix = "_VIDEO";
+            }
+            else if (cat == "RAM")
+            {
+                if (nm.Contains("used")) suffix = "_USED";
+                else if (nm.Contains("available")) suffix = "_AVAILABLE";
+                else if (nm.Contains("virtual")) suffix = "_VIRTUAL";
+            }
+            else if (cat == "DISK")
+            {
+                // Dodaj nazwę dysku jeśli jest
+                if (hw.Contains("samsung")) suffix = "_SAMSUNG";
+                else if (hw.Contains("crucial")) suffix = "_CRUCIAL";
+                else if (hw.Contains("wd") || hw.Contains("western")) suffix = "_WD";
+            }
+
+            return $"SENSOR_{cat}_{tp.ToUpper()}{suffix}";
+        }
+
+        /// <summary>
+        /// Generuje nazwę funkcji getter dla sensora
+        /// </summary>
+        private string GetSensorFuncName(SensorInfo s)
+        {
+            var enumName = GetSensorEnumName(s);
+            // SENSOR_CPU_TEMPERATURE_PACKAGE -> get_cpu_temperature_package
+            var funcName = enumName.Replace("SENSOR_", "get_").ToLower();
+            return funcName;
+        }
+
         private void BuildUI()
         {
             Text = "Hardware Monitor - Settings";
-            Size = new Size(1100, 820);
-            MinimumSize = new Size(1000, 700);
+            Size = new Size(1150, 850);
+            MinimumSize = new Size(1050, 750);
             StartPosition = FormStartPosition.CenterScreen;
             Font = new Font("Segoe UI", 9);
             Icon = CreateAppIcon();
             BackColor = Color.FromArgb(250, 250, 252);
 
-            // Main layout - use TableLayoutPanel for stable layout
             var mainTable = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
                 RowCount = 6,
-                Padding = new Padding(10)
+                Padding = new Padding(15)
             };
-            mainTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));  // Status
-            mainTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));  // Connection
-            mainTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 95));  // Appearance
-            mainTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));  // Startup
-            mainTable.RowStyles.Add(new RowStyle(SizeType.Percent, 100)); // Content
-            mainTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 55));  // Buttons
+            mainTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 65));  // Status
+            mainTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 65));  // Connection
+            mainTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 100)); // Appearance
+            mainTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 55));  // Startup
+            mainTable.RowStyles.Add(new RowStyle(SizeType.Percent, 100));  // Content
+            mainTable.RowStyles.Add(new RowStyle(SizeType.Absolute, 60));  // Buttons
 
             mainTable.Controls.Add(BuildStatusGroup(), 0, 0);
             mainTable.Controls.Add(BuildConnectionGroup(), 0, 1);
@@ -245,19 +308,27 @@ namespace HardwareMonitorTray
 
         private GroupBox BuildStatusGroup()
         {
-            var grp = new GroupBox { Text = "📊 Status", Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 5) };
-            var flow = new FlowLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(8, 5, 8, 0) };
+            var grp = new GroupBox
+            {
+                Text = "📊 Status",
+                Dock = DockStyle.Fill,
+                Margin = new Padding(0, 0, 0, 8),
+                Padding = new Padding(15, 8, 15, 8)
+            };
+
+            var flow = new FlowLayoutPanel { Dock = DockStyle.Fill };
 
             _startStopBtn = new Button
             {
                 Text = "▶ Start",
-                Width = 120,
-                Height = 32,
+                Width = 130,
+                Height = 34,
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(46, 204, 113),
                 ForeColor = Color.White,
                 Font = new Font("Segoe UI", 10, FontStyle.Bold),
-                Cursor = Cursors.Hand
+                Cursor = Cursors.Hand,
+                Margin = new Padding(0, 0, 20, 0)
             };
             _startStopBtn.FlatAppearance.BorderSize = 0;
             _startStopBtn.Click += OnStartStopClick;
@@ -267,9 +338,9 @@ namespace HardwareMonitorTray
             {
                 Text = "● Stopped",
                 AutoSize = true,
-                Font = new Font("Segoe UI", 10, FontStyle.Bold),
+                Font = new Font("Segoe UI", 11, FontStyle.Bold),
                 ForeColor = Color.Gray,
-                Margin = new Padding(25, 9, 0, 0)
+                Margin = new Padding(0, 8, 0, 0)
             };
             flow.Controls.Add(_statusLbl);
 
@@ -279,30 +350,44 @@ namespace HardwareMonitorTray
 
         private GroupBox BuildConnectionGroup()
         {
-            var grp = new GroupBox { Text = "📡 Connection", Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 5) };
-            var flow = new FlowLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(8, 5, 8, 0) };
+            var grp = new GroupBox
+            {
+                Text = "📡 Connection",
+                Dock = DockStyle.Fill,
+                Margin = new Padding(0, 0, 0, 8),
+                Padding = new Padding(15, 8, 15, 8)
+            };
 
-            flow.Controls.Add(new Label { Text = "Port:", AutoSize = true, Margin = new Padding(0, 8, 5, 0) });
-            _portCb = new ComboBox { Width = 100, DropDownStyle = ComboBoxStyle.DropDownList, Margin = new Padding(0, 4, 5, 0) };
+            var flow = new FlowLayoutPanel { Dock = DockStyle.Fill };
+
+            flow.Controls.Add(new Label { Text = "Port:", AutoSize = true, Margin = new Padding(0, 10, 8, 0) });
+            _portCb = new ComboBox { Width = 100, DropDownStyle = ComboBoxStyle.DropDownList, Margin = new Padding(0, 6, 8, 0) };
             _portCb.SelectedIndexChanged += OnSettingChanged;
             flow.Controls.Add(_portCb);
 
-            var refreshBtn = new Button { Text = "🔄", Width = 35, Height = 26, FlatStyle = FlatStyle.Flat, Margin = new Padding(0, 4, 20, 0) };
+            var refreshBtn = new Button
+            {
+                Text = "🔄",
+                Width = 38,
+                Height = 28,
+                FlatStyle = FlatStyle.Flat,
+                Margin = new Padding(0, 6, 25, 0)
+            };
             refreshBtn.FlatAppearance.BorderSize = 0;
             refreshBtn.Click += (s, e) => RefreshPorts();
             flow.Controls.Add(refreshBtn);
 
-            flow.Controls.Add(new Label { Text = "Baud:", AutoSize = true, Margin = new Padding(0, 8, 5, 0) });
-            _baudCb = new ComboBox { Width = 100, DropDownStyle = ComboBoxStyle.DropDownList, Margin = new Padding(0, 4, 20, 0) };
-            _baudCb.Items.AddRange(new object[] { 9600, 57600, 115200, 230400, 460800 });
+            flow.Controls.Add(new Label { Text = "Baud:", AutoSize = true, Margin = new Padding(0, 10, 8, 0) });
+            _baudCb = new ComboBox { Width = 110, DropDownStyle = ComboBoxStyle.DropDownList, Margin = new Padding(0, 6, 25, 0) };
+            _baudCb.Items.AddRange(new object[] { 9600, 57600, 115200, 230400, 460800, 921600 });
             _baudCb.SelectedIndexChanged += OnSettingChanged;
             flow.Controls.Add(_baudCb);
 
-            flow.Controls.Add(new Label { Text = "Interval:", AutoSize = true, Margin = new Padding(0, 8, 5, 0) });
-            _intervalNum = new NumericUpDown { Width = 85, Minimum = 50, Maximum = 60000, Increment = 50, Margin = new Padding(0, 4, 3, 0) };
+            flow.Controls.Add(new Label { Text = "Interval:", AutoSize = true, Margin = new Padding(0, 10, 8, 0) });
+            _intervalNum = new NumericUpDown { Width = 90, Minimum = 50, Maximum = 60000, Increment = 50, Margin = new Padding(0, 6, 5, 0) };
             _intervalNum.ValueChanged += OnSettingChanged;
             flow.Controls.Add(_intervalNum);
-            flow.Controls.Add(new Label { Text = "ms", AutoSize = true, Margin = new Padding(0, 8, 0, 0) });
+            flow.Controls.Add(new Label { Text = "ms", AutoSize = true, Margin = new Padding(0, 10, 0, 0) });
 
             grp.Controls.Add(flow);
             return grp;
@@ -310,27 +395,40 @@ namespace HardwareMonitorTray
 
         private GroupBox BuildAppearanceGroup()
         {
-            var grp = new GroupBox { Text = "🎨 Appearance", Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 5) };
-            var tbl = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 2, Padding = new Padding(8, 5, 8, 0) };
+            var grp = new GroupBox
+            {
+                Text = "🎨 Appearance",
+                Dock = DockStyle.Fill,
+                Margin = new Padding(0, 0, 0, 8),
+                Padding = new Padding(15, 8, 15, 8)
+            };
 
+            var tbl = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 4, RowCount = 2 };
             tbl.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            tbl.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220));
+            tbl.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 230));
             tbl.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             tbl.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
-            tbl.Controls.Add(new Label { Text = "Protocol:", AutoSize = true, Margin = new Padding(0, 8, 5, 0) }, 0, 0);
-            _protoCb = new ComboBox { Width = 200, DropDownStyle = ComboBoxStyle.DropDownList, Margin = new Padding(0, 4, 0, 0) };
+            tbl.Controls.Add(new Label { Text = "Protocol:", AutoSize = true, Margin = new Padding(0, 10, 10, 0) }, 0, 0);
+            _protoCb = new ComboBox { Width = 210, DropDownStyle = ComboBoxStyle.DropDownList, Margin = new Padding(0, 6, 0, 0) };
             _protoCb.Items.AddRange(new[] { "⚡ Binary (5 B/sensor)", "📝 Text (12 B/sensor)", "📋 JSON (80 B/sensor)" });
             _protoCb.SelectedIndexChanged += OnSettingChanged;
             tbl.Controls.Add(_protoCb, 1, 0);
 
-            tbl.Controls.Add(new Label { Text = "Tray Icon:", AutoSize = true, Margin = new Padding(0, 8, 5, 0) }, 0, 1);
-            _iconCb = new ComboBox { Width = 200, DropDownStyle = ComboBoxStyle.DropDownList, Margin = new Padding(0, 4, 0, 0) };
+            tbl.Controls.Add(new Label { Text = "Tray Icon:", AutoSize = true, Margin = new Padding(0, 10, 10, 0) }, 0, 1);
+            _iconCb = new ComboBox { Width = 210, DropDownStyle = ComboBoxStyle.DropDownList, Margin = new Padding(0, 6, 0, 0) };
             _iconCb.Items.AddRange(new[] { "🔴 Status Color", "🌡️ Temperature", "📊 Load Bars", "💻 Modern Chip", "⚡ Animated" });
             _iconCb.SelectedIndexChanged += (s, e) => { UpdateIconPreview(); OnSettingChanged(s, e); };
             tbl.Controls.Add(_iconCb, 1, 1);
 
-            _iconPic = new PictureBox { Width = 40, Height = 40, BackColor = Color.FromArgb(44, 62, 80), Margin = new Padding(15, 4, 0, 0), BorderStyle = BorderStyle.FixedSingle };
+            _iconPic = new PictureBox
+            {
+                Width = 44,
+                Height = 44,
+                BackColor = Color.FromArgb(44, 62, 80),
+                Margin = new Padding(20, 6, 0, 0),
+                BorderStyle = BorderStyle.FixedSingle
+            };
             tbl.Controls.Add(_iconPic, 2, 1);
 
             grp.Controls.Add(tbl);
@@ -339,14 +437,21 @@ namespace HardwareMonitorTray
 
         private GroupBox BuildStartupGroup()
         {
-            var grp = new GroupBox { Text = "🚀 Startup", Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 5) };
-            var flow = new FlowLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(8, 5, 8, 0) };
+            var grp = new GroupBox
+            {
+                Text = "🚀 Startup",
+                Dock = DockStyle.Fill,
+                Margin = new Padding(0, 0, 0, 8),
+                Padding = new Padding(15, 8, 15, 8)
+            };
 
-            _autoChk = new CheckBox { Text = "Auto-start monitoring on launch", AutoSize = true, Margin = new Padding(0, 5, 50, 0) };
+            var flow = new FlowLayoutPanel { Dock = DockStyle.Fill };
+
+            _autoChk = new CheckBox { Text = "Auto-start monitoring on launch", AutoSize = true, Margin = new Padding(0, 8, 60, 0) };
             _autoChk.CheckedChanged += OnSettingChanged;
             flow.Controls.Add(_autoChk);
 
-            _winChk = new CheckBox { Text = "Start with Windows", AutoSize = true, Margin = new Padding(0, 5, 0, 0) };
+            _winChk = new CheckBox { Text = "Start with Windows", AutoSize = true, Margin = new Padding(0, 8, 0, 0) };
             _winChk.CheckedChanged += OnSettingChanged;
             flow.Controls.Add(_winChk);
 
@@ -356,12 +461,12 @@ namespace HardwareMonitorTray
 
         private Panel BuildContentPanel()
         {
-            var panel = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 5) };
+            var panel = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 8) };
 
-            var rightPanel = new Panel { Dock = DockStyle.Right, Width = 330, Padding = new Padding(10, 0, 0, 0) };
+            var rightPanel = new Panel { Dock = DockStyle.Right, Width = 360, Padding = new Padding(12, 0, 0, 0) };
             BuildInfoPanel(rightPanel);
 
-            var leftPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 0, 10, 0) };
+            var leftPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 0, 12, 0) };
             BuildSensorsPanel(leftPanel);
 
             panel.Controls.Add(leftPanel);
@@ -372,51 +477,87 @@ namespace HardwareMonitorTray
 
         private void BuildSensorsPanel(Panel parent)
         {
-            var grp = new GroupBox { Text = "📊 Sensors", Dock = DockStyle.Fill };
-            var mainPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(10) };
+            var grp = new GroupBox { Text = "📊 Sensors", Dock = DockStyle.Fill, Padding = new Padding(12) };
+            var mainPanel = new Panel { Dock = DockStyle.Fill };
 
             // Search
-            var searchPanel = new Panel { Dock = DockStyle.Top, Height = 35 };
-            _searchBox = new TextBox { Width = 300, Location = new Point(0, 5) };
+            var searchPanel = new Panel { Dock = DockStyle.Top, Height = 38 };
+            _searchBox = new TextBox { Width = 320, Location = new Point(0, 6) };
             _searchBox.TextChanged += (s, e) => { if (_init) FilterList(); };
             searchPanel.Controls.Add(_searchBox);
 
-            var clrBtn = new Button { Text = "✕", Width = 30, Height = 26, Location = new Point(305, 4), FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(231, 76, 60), ForeColor = Color.White };
+            var clrBtn = new Button
+            {
+                Text = "✕",
+                Width = 32,
+                Height = 28,
+                Location = new Point(325, 5),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(231, 76, 60),
+                ForeColor = Color.White
+            };
             clrBtn.FlatAppearance.BorderSize = 0;
             clrBtn.Click += (s, e) => _searchBox.Text = "";
             searchPanel.Controls.Add(clrBtn);
 
             // Filters
-            var filterPanel = new Panel { Dock = DockStyle.Top, Height = 35 };
-            filterPanel.Controls.Add(new Label { Text = "Type:", AutoSize = true, Location = new Point(0, 9) });
-            _typeCb = new ComboBox { Width = 120, DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(45, 5) };
+            var filterPanel = new Panel { Dock = DockStyle.Top, Height = 38 };
+            filterPanel.Controls.Add(new Label { Text = "Type:", AutoSize = true, Location = new Point(0, 10) });
+            _typeCb = new ComboBox { Width = 130, DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(45, 6) };
             _typeCb.SelectedIndexChanged += (s, e) => { if (_init) FilterList(); };
             filterPanel.Controls.Add(_typeCb);
 
-            filterPanel.Controls.Add(new Label { Text = "Hardware:", AutoSize = true, Location = new Point(180, 9) });
-            _hwCb = new ComboBox { Width = 200, DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(250, 5) };
+            filterPanel.Controls.Add(new Label { Text = "Hardware:", AutoSize = true, Location = new Point(195, 10) });
+            _hwCb = new ComboBox { Width = 230, DropDownStyle = ComboBoxStyle.DropDownList, Location = new Point(265, 6) };
             _hwCb.SelectedIndexChanged += (s, e) => { if (_init) FilterList(); };
             filterPanel.Controls.Add(_hwCb);
 
             // Buttons
-            var btnPanel = new Panel { Dock = DockStyle.Top, Height = 38 };
+            var btnPanel = new Panel { Dock = DockStyle.Top, Height = 42 };
 
-            var allBtn = new Button { Text = "☑ All", Width = 60, Height = 28, Location = new Point(0, 5), FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(46, 204, 113), ForeColor = Color.White };
+            var allBtn = new Button
+            {
+                Text = "☑ All",
+                Width = 65,
+                Height = 30,
+                Location = new Point(0, 6),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(46, 204, 113),
+                ForeColor = Color.White
+            };
             allBtn.FlatAppearance.BorderSize = 0;
             allBtn.Click += (s, e) => SetAll(true);
             btnPanel.Controls.Add(allBtn);
 
-            var noneBtn = new Button { Text = "☐ None", Width = 70, Height = 28, Location = new Point(65, 5), FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(231, 76, 60), ForeColor = Color.White };
+            var noneBtn = new Button
+            {
+                Text = "☐ None",
+                Width = 75,
+                Height = 30,
+                Location = new Point(70, 6),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(231, 76, 60),
+                ForeColor = Color.White
+            };
             noneBtn.FlatAppearance.BorderSize = 0;
             noneBtn.Click += (s, e) => SetAll(false);
             btnPanel.Controls.Add(noneBtn);
 
-            var hdrBtn = new Button { Text = "📄 . h", Width = 55, Height = 28, Location = new Point(140, 5), FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(52, 152, 219), ForeColor = Color.White };
+            var hdrBtn = new Button
+            {
+                Text = "📄 Generate . h/.c",
+                Width = 130,
+                Height = 30,
+                Location = new Point(150, 6),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(52, 152, 219),
+                ForeColor = Color.White
+            };
             hdrBtn.FlatAppearance.BorderSize = 0;
             hdrBtn.Click += GenerateHeaderFiles;
             btnPanel.Controls.Add(hdrBtn);
 
-            _cntLbl = new Label { AutoSize = true, Location = new Point(205, 10), ForeColor = Color.Gray };
+            _cntLbl = new Label { AutoSize = true, Location = new Point(290, 12), ForeColor = Color.Gray };
             btnPanel.Controls.Add(_cntLbl);
 
             // ListView
@@ -433,9 +574,9 @@ namespace HardwareMonitorTray
             };
             _list.Columns.Add("", 30);
             _list.Columns.Add("Hardware", 180);
-            _list.Columns.Add("Name", 150);
+            _list.Columns.Add("Name", 160);
             _list.Columns.Add("Type", 90);
-            _list.Columns.Add("Value", 85);
+            _list.Columns.Add("Value", 90);
             _list.Columns.Add("ID", 60);
             _list.ItemChecked += OnItemChecked;
             EnableDoubleBuffer(_list);
@@ -462,34 +603,50 @@ namespace HardwareMonitorTray
 
         private void BuildInfoPanel(Panel parent)
         {
-            var grp = new GroupBox { Text = "📦 Packet Info", Dock = DockStyle.Fill };
-            var panel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(15) };
+            var grp = new GroupBox { Text = "📦 Packet Info", Dock = DockStyle.Fill, Padding = new Padding(15) };
+            var panel = new Panel { Dock = DockStyle.Fill };
 
             int y = 0;
 
             panel.Controls.Add(new Label { Text = "Selected Sensors:", Font = new Font(Font, FontStyle.Bold), AutoSize = true, Location = new Point(0, y) });
-            y += 22;
-
-            _selLbl = new Label { Text = "0", Font = new Font("Segoe UI", 32, FontStyle.Bold), ForeColor = Color.FromArgb(52, 152, 219), AutoSize = true, Location = new Point(0, y) };
-            panel.Controls.Add(_selLbl);
-            y += 60;
-
-            panel.Controls.Add(new Label { Text = "Packet Size:", Font = new Font(Font, FontStyle.Bold), AutoSize = true, Location = new Point(0, y) });
-            y += 22;
-
-            _sizeLbl = new Label { Text = "0 B", Font = new Font("Segoe UI", 18, FontStyle.Bold), ForeColor = Color.FromArgb(46, 204, 113), AutoSize = true, Location = new Point(0, y) };
-            panel.Controls.Add(_sizeLbl);
-            y += 35;
-
-            _sizeBar = new ProgressBar { Width = 270, Height = 14, Maximum = 500, Location = new Point(0, y) };
-            panel.Controls.Add(_sizeBar);
             y += 24;
 
-            _bwLbl = new Label { Text = "0 B/s", Font = new Font("Segoe UI", 11, FontStyle.Bold), ForeColor = Color.FromArgb(155, 89, 182), AutoSize = true, Location = new Point(0, y) };
-            panel.Controls.Add(_bwLbl);
+            _selLbl = new Label { Text = "0", Font = new Font("Segoe UI", 36, FontStyle.Bold), ForeColor = Color.FromArgb(52, 152, 219), AutoSize = true, Location = new Point(0, y) };
+            panel.Controls.Add(_selLbl);
+            y += 65;
+
+            panel.Controls.Add(new Label { Text = "Packet Size:", Font = new Font(Font, FontStyle.Bold), AutoSize = true, Location = new Point(0, y) });
+            y += 24;
+
+            _sizeLbl = new Label { Text = "0 B", Font = new Font("Segoe UI", 20, FontStyle.Bold), ForeColor = Color.FromArgb(46, 204, 113), AutoSize = true, Location = new Point(0, y) };
+            panel.Controls.Add(_sizeLbl);
             y += 40;
 
-            panel.Controls.Add(new Label { Text = "Preview:", Font = new Font(Font, FontStyle.Bold), AutoSize = true, Location = new Point(0, y) });
+            _sizeBar = new ProgressBar { Width = 300, Height = 16, Maximum = 500, Location = new Point(0, y) };
+            panel.Controls.Add(_sizeBar);
+            y += 26;
+
+            _bwLbl = new Label { Text = "0 B/s", Font = new Font("Segoe UI", 12, FontStyle.Bold), ForeColor = Color.FromArgb(155, 89, 182), AutoSize = true, Location = new Point(0, y) };
+            panel.Controls.Add(_bwLbl);
+            y += 45;
+
+            // Help button
+            _helpBtn = new Button
+            {
+                Text = "❓ Protocol Help",
+                Width = 140,
+                Height = 30,
+                Location = new Point(0, y),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(241, 196, 15),
+                ForeColor = Color.Black
+            };
+            _helpBtn.FlatAppearance.BorderSize = 0;
+            _helpBtn.Click += ShowProtocolHelp;
+            panel.Controls.Add(_helpBtn);
+            y += 45;
+
+            panel.Controls.Add(new Label { Text = "Live Preview:", Font = new Font(Font, FontStyle.Bold), AutoSize = true, Location = new Point(0, y) });
             y += 24;
 
             _previewBox = new TextBox
@@ -498,20 +655,20 @@ namespace HardwareMonitorTray
                 ReadOnly = true,
                 ScrollBars = ScrollBars.Both,
                 WordWrap = false,
-                Font = new Font("Consolas", 9f),
-                BackColor = Color.FromArgb(25, 25, 25),
+                Font = new Font("Consolas", 9.5f),
+                BackColor = Color.FromArgb(20, 20, 25),
                 ForeColor = Color.FromArgb(46, 204, 113),
                 BorderStyle = BorderStyle.FixedSingle,
                 Location = new Point(0, y),
-                Size = new Size(270, 200)
+                Size = new Size(310, 220)
             };
             panel.Controls.Add(_previewBox);
 
             panel.Resize += (s, e) =>
             {
-                _previewBox.Width = Math.Max(150, panel.Width - 30);
-                _previewBox.Height = Math.Max(100, panel.Height - y - 20);
-                _sizeBar.Width = Math.Max(150, panel.Width - 30);
+                _previewBox.Width = Math.Max(200, panel.Width - 30);
+                _previewBox.Height = Math.Max(150, panel.Height - y - 20);
+                _sizeBar.Width = Math.Max(200, panel.Width - 30);
             };
 
             grp.Controls.Add(panel);
@@ -521,14 +678,31 @@ namespace HardwareMonitorTray
         private Panel BuildButtonsPanel()
         {
             var panel = new Panel { Dock = DockStyle.Fill };
-            var flow = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(0, 10, 0, 0) };
+            var flow = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(0, 12, 0, 0) };
 
-            var exitBtn = new Button { Text = "🚪 Exit", Width = 100, Height = 36, FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(149, 165, 166), ForeColor = Color.White };
+            var exitBtn = new Button
+            {
+                Text = "🚪 Exit",
+                Width = 110,
+                Height = 38,
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(149, 165, 166),
+                ForeColor = Color.White,
+                Margin = new Padding(10, 0, 0, 0)
+            };
             exitBtn.FlatAppearance.BorderSize = 0;
             exitBtn.Click += (s, e) => { if (ConfirmExit()) Close(); };
             flow.Controls.Add(exitBtn);
 
-            _saveBtn = new Button { Text = "💾 Save", Width = 100, Height = 36, FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(52, 152, 219), ForeColor = Color.White };
+            _saveBtn = new Button
+            {
+                Text = "💾 Save",
+                Width = 110,
+                Height = 38,
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(52, 152, 219),
+                ForeColor = Color.White
+            };
             _saveBtn.FlatAppearance.BorderSize = 0;
             _saveBtn.Click += Save;
             flow.Controls.Add(_saveBtn);
@@ -537,11 +711,137 @@ namespace HardwareMonitorTray
             return panel;
         }
 
+        private void ShowProtocolHelp(object s, EventArgs e)
+        {
+            var helpForm = new Form
+            {
+                Text = "Protocol Documentation",
+                Size = new Size(800, 700),
+                StartPosition = FormStartPosition.CenterParent,
+                BackColor = Color.FromArgb(30, 30, 35),
+                Font = new Font("Consolas", 10)
+            };
+
+            var textBox = new RichTextBox
+            {
+                Dock = DockStyle.Fill,
+                ReadOnly = true,
+                BackColor = Color.FromArgb(30, 30, 35),
+                ForeColor = Color.FromArgb(220, 220, 220),
+                BorderStyle = BorderStyle.None,
+                Font = new Font("Consolas", 10)
+            };
+
+            textBox.Text = @"
+================================================================================
+                        HARDWARE MONITOR PROTOCOL v1.0
+================================================================================
+
+1. BINARY PROTOCOL (Recommended - most efficient)
+--------------------------------------------------------------------------------
+
+Packet structure:
++-------+-----+-------+------------------+-------+-----+
+| START | VER | COUNT |   SENSOR DATA    | CRC16 | END |
+| 0xAA  | 1B  |  1B   |    N x 5B        |  2B   |0x55 |
++-------+-----+-------+------------------+-------+-----+
+
+Each sensor (5 bytes):
++----------+----------------------------------+
+| ID (1B)  | VALUE (4B float, little-endian) |
++----------+----------------------------------+
+
+Example (2 sensors, CPU=65. 5°C, GPU=70.0°C):
+AA 01 02 01 00 00 83 42 10 00 00 8C 42 [CRC] 55
+|  |  |  |  |---------|  |  |---------|       |
+|  |  |  |  CPU=65.5     |  GPU=70.0          End
+|  |  |  CPU ID (0x01)   GPU ID (0x10)
+|  |  2 sensors
+|  Version 1
+Start
+
+
+2. SENSOR IDs
+--------------------------------------------------------------------------------
+
+CPU Sensors:          GPU Sensors:          RAM Sensors: 
+  0x01 - Temp Pkg       0x10 - Temp Core      0x20 - Data Used
+  0x02 - Load Total     0x11 - Load Core      0x21 - Data Avail
+  0x03 - Clock          0x12 - Clock Core     0x22 - Load %
+  0x04 - Power Pkg      0x13 - Clock Mem
+  0x05 - Temp Core      0x14 - Power        DISK Sensors: 
+  0x06 - Load Core      0x15 - Load Mem       0x30 - Temperature
+  0x07 - Power Core     0x16 - Fan RPM        0x31 - Load %
+  0x08 - Temp CCD       0x17 - Temp Mem
+                        0x18 - Temp Hotspot Custom:  0x80-0xFE
+
+
+3. TEXT PROTOCOL (For debugging)
+--------------------------------------------------------------------------------
+
+$START
+01: 65.5
+10:70.0
+02:45.2
+$END: XX
+
+Format:  <ID_HEX>:<VALUE>
+
+
+4. JSON PROTOCOL (For web apps)
+--------------------------------------------------------------------------------
+
+{
+  ""timestamp"": ""2024-01-15T12:00:00Z"",
+  ""sensors"": [
+    {""id"": ""0x01"", ""name"": ""CPU Temp"", ""value"": 65.5, ""unit"": ""°C""},
+    {""id"": ""0x10"", ""name"": ""GPU Temp"", ""value"": 70.0, ""unit"": ""°C""}
+  ]
+}
+
+
+5. ESP32/ESP-IDF EXAMPLE
+--------------------------------------------------------------------------------
+
+#include ""hw_monitor.h""
+#include ""driver/uart.h""
+
+void app_main() {
+    hw_init();
+    uart_config_t cfg = {
+        .baud_rate = 115200,
+        . data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+    };
+    uart_driver_install(UART_NUM_1, 1024, 0, 0, NULL, 0);
+    uart_param_config(UART_NUM_1, &cfg);
+    
+    uint8_t buf[512];
+    while (1) {
+        int len = uart_read_bytes(UART_NUM_1, buf, sizeof(buf), 100);
+        if (len > 0 && hw_parse(buf, len)) {
+            float cpu = hw_get_cpu_temperature_pkg();
+            float gpu = hw_get_gpu_temperature_core();
+            printf(""CPU: %.1f°C, GPU: %.1f°C\n"", cpu, gpu);
+        }
+    }
+}
+
+================================================================================
+";
+
+            helpForm.Controls.Add(textBox);
+            helpForm.ShowDialog(this);
+        }
+
         private void OnFormClosing(object s, FormClosingEventArgs e)
         {
             _closing = true;
             _uiTimer?.Stop();
             _uiTimer?.Dispose();
+            _previewAnimTimer?.Stop();
+            _previewAnimTimer?.Dispose();
             _mon.OnDataReady -= OnSensorData;
             _iconMgr?.Dispose();
         }
@@ -772,7 +1072,7 @@ namespace HardwareMonitorTray
             _sizeBar.Value = Math.Min(size, 500);
 
             var pps = 1000.0 / Math.Max(1, (double)_intervalNum.Value);
-            _bwLbl.Text = $"{size * pps:0} B/s ({pps:0.0}/s)";
+            _bwLbl.Text = $"{size * pps:0} B/s ({pps:0.0} packets/s)";
 
             UpdatePreview();
         }
@@ -780,46 +1080,96 @@ namespace HardwareMonitorTray
         private void UpdatePreview()
         {
             var sel = _list.CheckedItems.Cast<ListViewItem>()
-                .Take(8)
+                .Take(6)
                 .Select(i => i.Tag as SensorInfo)
                 .Where(x => x != null)
                 .ToList();
 
             if (sel.Count == 0)
             {
-                _previewBox.Text = "(select sensors to preview)";
+                _previewBox.Text = "(select sensors to see live preview)";
                 return;
             }
 
             var sb = new StringBuilder();
             var proto = (ProtocolMode)Math.Max(0, _protoCb.SelectedIndex);
 
+            // Symuluj zmieniające się wartości
+            var rand = new Random(_previewAnimFrame);
+
             if (proto == ProtocolMode.Binary)
             {
-                sb.AppendLine($"AA 01 {sel.Count:X2}");
+                sb.AppendLine("┌─────────────────────────────────────────────┐");
+                sb.AppendLine("│ BINARY PACKET (Live)                        │");
+                sb.AppendLine("├─────────────────────────────────────────────┤");
+                sb.AppendLine();
+
+                // Header
+                sb.AppendLine($"START: AA");
+                sb.AppendLine($"VER:    01");
+                sb.AppendLine($"COUNT: {sel.Count:X2} ({sel.Count} sensors)");
+                sb.AppendLine();
+                sb.AppendLine("DATA:");
+
                 foreach (var s in sel)
-                    sb.AppendLine($"  {GetSensorId(s):X2} [float] // {s.Name}:{s.Value:0.0}");
-                sb.AppendLine("[CRC16] 55");
+                {
+                    var id = GetSensorId(s);
+                    var baseVal = s.Value ?? 50f;
+                    var simVal = baseVal + (float)(rand.NextDouble() * 2 - 1); // ±1 variation
+                    var bytes = BitConverter.GetBytes(simVal);
+
+                    sb.AppendLine($"  [{id:X2}] {bytes[0]:X2} {bytes[1]:X2} {bytes[2]:X2} {bytes[3]:X2}  = {simVal:F1} ({s.Name})");
+                }
+
+                sb.AppendLine();
+                sb.AppendLine($"CRC16: XX XX");
+                sb.AppendLine($"END:    55");
+                sb.AppendLine();
+                sb.AppendLine("├─────────────────────────────────────────────┤");
+                sb.AppendLine($"│ Total: {6 + sel.Count * 5} bytes                              │");
+                sb.AppendLine("└─────────────────────────────────────────────┘");
             }
             else if (proto == ProtocolMode.Text)
             {
+                sb.AppendLine("┌─────────────────────────────────────────────┐");
+                sb.AppendLine("│ TEXT PROTOCOL (Live)                        │");
+                sb.AppendLine("├─────────────────────────────────────────────┤");
+                sb.AppendLine();
                 sb.AppendLine("$START");
+
                 foreach (var s in sel)
-                    sb.AppendLine($"{GetSensorId(s):X2}:{s.Value:0.0}");
+                {
+                    var id = GetSensorId(s);
+                    var baseVal = s.Value ?? 50f;
+                    var simVal = baseVal + (float)(rand.NextDouble() * 2 - 1);
+                    sb.AppendLine($"{id:X2}:{simVal:F1}");
+                }
+
                 sb.AppendLine("$END: XX");
+                sb.AppendLine();
+                sb.AppendLine("└─────────────────────────────────────────────┘");
             }
             else
             {
                 sb.AppendLine("{");
-                sb.AppendLine("  \"sensors\": [");
-                foreach (var s in sel)
-                    sb.AppendLine($"    {{\"id\": \"0x{GetSensorId(s):X2}\",\"n\":\"{s.Name}\",\"v\":{s.Value:0.0}}},");
+                sb.AppendLine($"  \"timestamp\": \"{DateTime.UtcNow: o}\",");
+                sb.AppendLine("  \"sensors\":  [");
+
+                for (int i = 0; i < sel.Count; i++)
+                {
+                    var s = sel[i];
+                    var baseVal = s.Value ?? 50f;
+                    var simVal = baseVal + (float)(rand.NextDouble() * 2 - 1);
+                    var comma = i < sel.Count - 1 ? "," : "";
+                    sb.AppendLine($"    {{\"id\": \"0x{GetSensorId(s):X2}\",\"name\":\"{s.Name}\",\"value\":{simVal:F1}}}{comma}");
+                }
+
                 sb.AppendLine("  ]");
                 sb.AppendLine("}");
             }
 
-            if (GetTotalSelected() > 8)
-                sb.AppendLine($"\n... +{GetTotalSelected() - 8} more sensors");
+            if (GetTotalSelected() > 6)
+                sb.AppendLine($"\n... and {GetTotalSelected() - 6} more sensors");
 
             _previewBox.Text = sb.ToString();
         }
@@ -880,10 +1230,12 @@ namespace HardwareMonitorTray
         private bool ConfirmExit()
         {
             if (!_dirty) return true;
-            var r = MessageBox.Show("Save changes? ", "Unsaved Changes", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+            var r = MessageBox.Show("Save changes?", "Unsaved Changes", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
             if (r == DialogResult.Yes) Save(null, null);
             return r != DialogResult.Cancel;
         }
+
+        #region Header Generation
 
         #region Header Generation
 
@@ -902,46 +1254,131 @@ namespace HardwareMonitorTray
 
             using var dlg = new SaveFileDialog
             {
-                Filter = "C Header|*. h",
-                FileName = "hw_sensors.h",
-                Title = "Save Header File (will also create . c file)"
+                Filter = "C Header|*.h",
+                FileName = "hw_monitor. h",
+                Title = "Save Header File (. c will be created automatically)"
             };
 
             if (dlg.ShowDialog() != DialogResult.OK) return;
 
             var hFile = dlg.FileName;
             var cFile = Path.ChangeExtension(hFile, ".c");
-            var baseName = Path.GetFileNameWithoutExtension(hFile).ToUpper();
+            var baseName = Path.GetFileNameWithoutExtension(hFile).ToUpper().Replace("-", "_").Replace(" ", "_");
 
-            // Generate . h
-            var hContent = GenerateHeaderContent(sel, baseName, Path.GetFileName(hFile));
+            // Buduj unikalne nazwy - każdy sensor musi mieć unikalne ID i nazwę
+            var sensorData = new List<(SensorInfo sensor, string enumName, byte id)>();
+            var usedEnumNames = new HashSet<string>();
+            var usedIds = new HashSet<byte>();
+
+            foreach (var sensor in sel)
+            {
+                var id = GetSensorId(sensor);
+
+                // Jeśli ID już użyte, przypisz nowe z custom range
+                while (usedIds.Contains(id))
+                {
+                    id = _nextCustomId++;
+                }
+                usedIds.Add(id);
+
+                // Generuj unikalną nazwę
+                var baseEnumName = GenerateEnumName(sensor);
+                var enumName = baseEnumName;
+                int suffix = 2;
+
+                while (usedEnumNames.Contains(enumName))
+                {
+                    enumName = $"{baseEnumName}_{suffix}";
+                    suffix++;
+                }
+                usedEnumNames.Add(enumName);
+
+                sensorData.Add((sensor, enumName, id));
+            }
+
+            // Generate files
+            var hContent = GenerateHeader(sensorData, baseName, Path.GetFileName(hFile));
+            var cContent = GenerateSource(sensorData, Path.GetFileName(hFile), baseName);
+
             File.WriteAllText(hFile, hContent);
-
-            // Generate . c
-            var cContent = GenerateSourceContent(sel, Path.GetFileName(hFile));
             File.WriteAllText(cFile, cContent);
 
             MessageBox.Show(
-                $"Generated files:\n\n" +
+                $"Generated:\n\n" +
                 $"• {Path.GetFileName(hFile)}\n" +
                 $"• {Path.GetFileName(cFile)}\n\n" +
-                $"Sensors: {sel.Count}\n" +
+                $"Sensors:  {sensorData.Count}\n" +
                 $"Location: {Path.GetDirectoryName(hFile)}",
-                "✓ Files Generated",
+                "Success",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information);
         }
 
-        private string GenerateHeaderContent(List<SensorInfo> sensors, string baseName, string fileName)
+        private string GenerateEnumName(SensorInfo s)
+        {
+            var cat = GetCategory(s);
+            var hw = s.Hardware.ToLower();
+            var nm = s.Name.ToLower();
+            var tp = s.Type.ToUpper();
+
+            // Buduj szczegółową nazwę
+            var parts = new List<string> { "SENSOR", cat, tp };
+
+            // Dodaj specyficzne info
+            if (cat == "CPU")
+            {
+                if (nm.Contains("package")) parts.Add("PKG");
+                else if (nm.Contains("tctl") || nm.Contains("tdie")) parts.Add("TDIE");
+                else if (nm.Contains("ccd"))
+                {
+                    if (nm.Contains("1")) parts.Add("CCD1");
+                    else if (nm.Contains("2")) parts.Add("CCD2");
+                    else parts.Add("CCD");
+                }
+                else if (nm.Contains("core"))
+                {
+                    // Wyciągnij numer rdzenia
+                    var match = System.Text.RegularExpressions.Regex.Match(nm, @"#? (\d+)");
+                    if (match.Success)
+                        parts.Add($"CORE{match.Groups[1].Value}");
+                    else
+                        parts.Add("CORE");
+                }
+                else if (nm.Contains("total")) parts.Add("TOTAL");
+            }
+            else if (cat == "GPU")
+            {
+                if (nm.Contains("hotspot") || nm.Contains("hot spot")) parts.Add("HOTSPOT");
+                else if (nm.Contains("memory") || nm.Contains("vram")) parts.Add("VRAM");
+                else if (nm.Contains("core")) parts.Add("CORE");
+                else if (nm.Contains("video")) parts.Add("VIDEO");
+            }
+            else if (cat == "RAM")
+            {
+                if (nm.Contains("used")) parts.Add("USED");
+                else if (nm.Contains("available")) parts.Add("AVAIL");
+                else if (nm.Contains("virtual")) parts.Add("VIRT");
+            }
+            else if (cat == "DISK")
+            {
+                if (hw.Contains("samsung")) parts.Add("SAMSUNG");
+                else if (hw.Contains("crucial")) parts.Add("CRUCIAL");
+                else if (hw.Contains("wd") || hw.Contains("western")) parts.Add("WD");
+                else if (hw.Contains("nvme")) parts.Add("NVME");
+            }
+
+            return string.Join("_", parts);
+        }
+
+        private string GenerateHeader(List<(SensorInfo sensor, string enumName, byte id)> sensors, string baseName, string fileName)
         {
             var sb = new StringBuilder();
 
             sb.AppendLine("/**");
-            sb.AppendLine($" * Hardware Monitor Sensor Definitions");
-            sb.AppendLine($" * Generated:  {DateTime.Now:yyyy-MM-dd HH:mm: ss}");
-            sb.AppendLine($" * Sensors: {sensors.Count}");
-            sb.AppendLine(" *");
-            sb.AppendLine(" * Compatible with ESP-IDF, Arduino, and plain C");
+            sb.AppendLine($" * @file {fileName}");
+            sb.AppendLine(" * @brief Hardware Monitor - Sensor Definitions");
+            sb.AppendLine($" * @date {DateTime.Now:yyyy-MM-dd HH:mm: ss}");
+            sb.AppendLine(" * @note Auto-generated file");
             sb.AppendLine(" */");
             sb.AppendLine();
             sb.AppendLine($"#ifndef {baseName}_H");
@@ -952,36 +1389,20 @@ namespace HardwareMonitorTray
             sb.AppendLine("#endif");
             sb.AppendLine();
             sb.AppendLine("#include <stdint.h>");
-            sb.AppendLine("#include <stdbool. h>");
+            sb.AppendLine("#include <stdbool.h>");
             sb.AppendLine("#include <stddef.h>");
             sb.AppendLine();
-            sb.AppendLine("/* ========================================");
-            sb.AppendLine("   Protocol Constants");
-            sb.AppendLine("   ======================================== */");
+            sb.AppendLine("/* Protocol */");
+            sb.AppendLine("#define HW_START_BYTE  0xAA");
+            sb.AppendLine("#define HW_END_BYTE    0x55");
+            sb.AppendLine("#define HW_VERSION     0x01");
             sb.AppendLine();
-            sb.AppendLine("#define HW_PROTO_START   0xAA");
-            sb.AppendLine("#define HW_PROTO_END     0x55");
-            sb.AppendLine("#define HW_PROTO_VERSION 0x01");
-            sb.AppendLine();
-            sb.AppendLine("/* ========================================");
-            sb.AppendLine("   Sensor IDs");
-            sb.AppendLine("   ======================================== */");
-            sb.AppendLine();
+            sb.AppendLine("/* Sensor IDs */");
             sb.AppendLine("typedef enum {");
 
-            // Group sensors by category
-            var grouped = sensors.GroupBy(s => GetCategory(s)).OrderBy(g => g.Key);
-            foreach (var group in grouped)
+            foreach (var (sensor, enumName, id) in sensors)
             {
-                sb.AppendLine($"    /* {group.Key} */");
-                foreach (var sensor in group)
-                {
-                    var id = GetSensorId(sensor);
-                    var enumName = $"SENSOR_{GetCategory(sensor)}_{sensor.Type.ToUpper()}";
-                    if (id >= 0x80) enumName += $"_{id - 0x80}";
-                    sb.AppendLine($"    {enumName,-40} = 0x{id:X2},  /* {sensor.Name} */");
-                }
-                sb.AppendLine();
+                sb.AppendLine($"    {enumName} = 0x{id: X2},");
             }
 
             sb.AppendLine("    SENSOR_UNKNOWN = 0xFF");
@@ -989,79 +1410,30 @@ namespace HardwareMonitorTray
             sb.AppendLine();
             sb.AppendLine($"#define HW_SENSOR_COUNT {sensors.Count}");
             sb.AppendLine();
-            sb.AppendLine("/* ========================================");
-            sb.AppendLine("   Data Structures");
-            sb.AppendLine("   ======================================== */");
-            sb.AppendLine();
+            sb.AppendLine("/* Data structure */");
             sb.AppendLine("typedef struct {");
             sb.AppendLine("    hw_sensor_id_t id;");
             sb.AppendLine("    float value;");
             sb.AppendLine("    bool valid;");
-            sb.AppendLine("    uint32_t timestamp;");
-            sb.AppendLine("} hw_sensor_data_t;");
+            sb.AppendLine("} hw_sensor_t;");
             sb.AppendLine();
-            sb.AppendLine("/* ========================================");
-            sb.AppendLine("   Global Storage");
-            sb.AppendLine("   ======================================== */");
+            sb.AppendLine("/* Storage */");
+            sb.AppendLine("extern hw_sensor_t hw_sensors[HW_SENSOR_COUNT];");
             sb.AppendLine();
-            sb.AppendLine("extern hw_sensor_data_t hw_sensors[HW_SENSOR_COUNT];");
+            sb.AppendLine("/* Functions */");
+            sb.AppendLine("void hw_init(void);");
+            sb.AppendLine("bool hw_parse(const uint8_t* data, size_t len);");
+            sb.AppendLine("float hw_get(hw_sensor_id_t id);");
+            sb.AppendLine("bool hw_valid(hw_sensor_id_t id);");
+            sb.AppendLine("const char* hw_name(hw_sensor_id_t id);");
+            sb.AppendLine("const char* hw_unit(hw_sensor_id_t id);");
             sb.AppendLine();
-            sb.AppendLine("/* ========================================");
-            sb.AppendLine("   Function Prototypes");
-            sb.AppendLine("   ======================================== */");
-            sb.AppendLine();
-            sb.AppendLine("/**");
-            sb.AppendLine(" * Initialize sensor storage");
-            sb.AppendLine(" */");
-            sb.AppendLine("void hw_sensors_init(void);");
-            sb.AppendLine();
-            sb.AppendLine("/**");
-            sb.AppendLine(" * Parse binary packet from PC");
-            sb.AppendLine(" * @param data Pointer to packet data");
-            sb.AppendLine(" * @param len Length of packet");
-            sb.AppendLine(" * @return true if packet was valid");
-            sb.AppendLine(" */");
-            sb.AppendLine("bool hw_sensors_parse(const uint8_t* data, size_t len);");
-            sb.AppendLine();
-            sb.AppendLine("/**");
-            sb.AppendLine(" * Get sensor value by ID");
-            sb.AppendLine(" * @param id Sensor ID");
-            sb.AppendLine(" * @return Sensor value or -999. 0 if not found/invalid");
-            sb.AppendLine(" */");
-            sb.AppendLine("float hw_sensors_get(hw_sensor_id_t id);");
-            sb.AppendLine();
-            sb.AppendLine("/**");
-            sb.AppendLine(" * Check if sensor data is valid");
-            sb.AppendLine(" * @param id Sensor ID");
-            sb.AppendLine(" * @return true if sensor has valid data");
-            sb.AppendLine(" */");
-            sb.AppendLine("bool hw_sensors_valid(hw_sensor_id_t id);");
-            sb.AppendLine();
-            sb.AppendLine("/**");
-            sb.AppendLine(" * Get sensor name");
-            sb.AppendLine(" * @param id Sensor ID");
-            sb.AppendLine(" * @return Sensor name string");
-            sb.AppendLine(" */");
-            sb.AppendLine("const char* hw_sensors_name(hw_sensor_id_t id);");
-            sb.AppendLine();
-            sb.AppendLine("/**");
-            sb.AppendLine(" * Get sensor unit");
-            sb.AppendLine(" * @param id Sensor ID");
-            sb.AppendLine(" * @return Unit string (°C, %, MHz, etc.)");
-            sb.AppendLine(" */");
-            sb.AppendLine("const char* hw_sensors_unit(hw_sensor_id_t id);");
-            sb.AppendLine();
-            sb.AppendLine("/* ========================================");
-            sb.AppendLine("   Convenience Getter Macros");
-            sb.AppendLine("   ======================================== */");
-            sb.AppendLine();
+            sb.AppendLine("/* Getters */");
 
-            foreach (var sensor in sensors)
+            foreach (var (sensor, enumName, id) in sensors)
             {
-                var id = GetSensorId(sensor);
-                var macroName = $"HW_GET_{GetCategory(sensor)}_{sensor.Type.ToUpper()}";
-                if (id >= 0x80) macroName += $"_{id - 0x80}";
-                sb.AppendLine($"#define {macroName}() hw_sensors_get(0x{id:X2})");
+                var funcName = enumName.Replace("SENSOR_", "hw_get_").ToLower();
+                sb.AppendLine($"#define {funcName}() hw_get({enumName})");
             }
 
             sb.AppendLine();
@@ -1074,66 +1446,347 @@ namespace HardwareMonitorTray
             return sb.ToString();
         }
 
-        private string GenerateSourceContent(List<SensorInfo> sensors, string headerFile)
+        private string GenerateSource(List<(SensorInfo sensor, string enumName, byte id)> sensors, string headerFile, string baseName)
         {
             var sb = new StringBuilder();
 
             sb.AppendLine("/**");
-            sb.AppendLine($" * Hardware Monitor Sensor Implementation");
-            sb.AppendLine($" * Generated: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+            sb.AppendLine($" * @file {Path.ChangeExtension(headerFile, ".c")}");
+            sb.AppendLine(" * @brief Hardware Monitor - Implementation");
+            sb.AppendLine($" * @date {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
             sb.AppendLine(" */");
             sb.AppendLine();
             sb.AppendLine($"#include \"{headerFile}\"");
             sb.AppendLine("#include <string.h>");
             sb.AppendLine();
-            sb.AppendLine("/* Sensor storage */");
-            sb.AppendLine("hw_sensor_data_t hw_sensors[HW_SENSOR_COUNT];");
+            sb.AppendLine("hw_sensor_t hw_sensors[HW_SENSOR_COUNT];");
             sb.AppendLine();
-            sb.AppendLine("/* ========================================");
-            sb.AppendLine("   Initialization");
-            sb.AppendLine("   ======================================== */");
-            sb.AppendLine();
-            sb.AppendLine("void hw_sensors_init(void) {");
+            sb.AppendLine("void hw_init(void) {");
             sb.AppendLine("    memset(hw_sensors, 0, sizeof(hw_sensors));");
             sb.AppendLine("    for (int i = 0; i < HW_SENSOR_COUNT; i++) {");
             sb.AppendLine("        hw_sensors[i].id = SENSOR_UNKNOWN;");
+            sb.AppendLine("        hw_sensors[i].value = -999.0f;");
+            sb.AppendLine("        hw_sensors[i].valid = false;");
+            sb.AppendLine("    }");
+            sb.AppendLine("}");
+            sb.AppendLine();
+            sb.AppendLine("bool hw_parse(const uint8_t* data, size_t len) {");
+            sb.AppendLine("    if (! data || len < 6) return false;");
+            sb.AppendLine("    if (data[0] != HW_START_BYTE) return false;");
+            sb.AppendLine("    if (data[1] != HW_VERSION) return false;");
+            sb.AppendLine();
+            sb.AppendLine("    uint8_t count = data[2];");
+            sb.AppendLine("    if (len < (size_t)(6 + count * 5)) return false;");
+            sb.AppendLine("    if (data[len - 1] != HW_END_BYTE) return false;");
+            sb.AppendLine();
+            sb.AppendLine("    size_t offset = 3;");
+            sb.AppendLine("    for (uint8_t i = 0; i < count && i < HW_SENSOR_COUNT; i++) {");
+            sb.AppendLine("        hw_sensors[i]. id = (hw_sensor_id_t)data[offset];");
+            sb.AppendLine("        union { float f; uint8_t b[4]; } conv;");
+            sb.AppendLine("        conv.b[0] = data[offset + 1];");
+            sb.AppendLine("        conv.b[1] = data[offset + 2];");
+            sb.AppendLine("        conv.b[2] = data[offset + 3];");
+            sb.AppendLine("        conv. b[3] = data[offset + 4];");
+            sb.AppendLine("        hw_sensors[i]. value = conv.f;");
+            sb.AppendLine("        hw_sensors[i].valid = true;");
+            sb.AppendLine("        offset += 5;");
+            sb.AppendLine("    }");
+            sb.AppendLine("    return true;");
+            sb.AppendLine("}");
+            sb.AppendLine();
+            sb.AppendLine("float hw_get(hw_sensor_id_t id) {");
+            sb.AppendLine("    for (int i = 0; i < HW_SENSOR_COUNT; i++) {");
+            sb.AppendLine("        if (hw_sensors[i].id == id && hw_sensors[i].valid)");
+            sb.AppendLine("            return hw_sensors[i].value;");
+            sb.AppendLine("    }");
+            sb.AppendLine("    return -999.0f;");
+            sb.AppendLine("}");
+            sb.AppendLine();
+            sb.AppendLine("bool hw_valid(hw_sensor_id_t id) {");
+            sb.AppendLine("    for (int i = 0; i < HW_SENSOR_COUNT; i++) {");
+            sb.AppendLine("        if (hw_sensors[i].id == id)");
+            sb.AppendLine("            return hw_sensors[i].valid;");
+            sb.AppendLine("    }");
+            sb.AppendLine("    return false;");
+            sb.AppendLine("}");
+            sb.AppendLine();
+            sb.AppendLine("const char* hw_name(hw_sensor_id_t id) {");
+            sb.AppendLine("    switch (id) {");
+
+            foreach (var (sensor, enumName, id) in sensors)
+            {
+                var name = sensor.Name.Replace("\"", "'");
+                if (name.Length > 32) name = name.Substring(0, 29) + "...";
+                sb.AppendLine($"        case {enumName}:  return \"{name}\";");
+            }
+
+            sb.AppendLine("        default: return \"Unknown\";");
+            sb.AppendLine("    }");
+            sb.AppendLine("}");
+            sb.AppendLine();
+            sb.AppendLine("const char* hw_unit(hw_sensor_id_t id) {");
+            sb.AppendLine("    switch (id) {");
+
+            // Grupuj po typie sensora (jednostce)
+            var grouped = sensors.GroupBy(s => s.sensor.Type);
+            foreach (var group in grouped)
+            {
+                var unit = group.First().sensor.Unit ?? "";
+                foreach (var (sensor, enumName, id) in group)
+                {
+                    sb.AppendLine($"        case {enumName}:");
+                }
+                sb.AppendLine($"            return \"{unit}\";");
+            }
+
+            sb.AppendLine("        default:  return \"\";");
+            sb.AppendLine("    }");
+            sb.AppendLine("}");
+
+            return sb.ToString();
+        }
+
+
+
+        #endregion
+
+        private string GenerateHeaderContent(List<(SensorInfo sensor, string enumName, string funcName, byte id)> sensors, string baseName, string fileName)
+        {
+            var sb = new StringBuilder();
+
+            sb.AppendLine("/**");
+            sb.AppendLine($" * @file {fileName}");
+            sb.AppendLine($" * @brief Hardware Monitor Sensor Definitions");
+            sb.AppendLine($" * @date {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+            sb.AppendLine($" * @note Auto-generated - DO NOT EDIT MANUALLY");
+            sb.AppendLine(" *");
+            sb.AppendLine(" * Compatible with: ESP-IDF, Arduino, plain C");
+            sb.AppendLine(" */");
+            sb.AppendLine();
+            sb.AppendLine($"#ifndef {baseName}_H");
+            sb.AppendLine($"#define {baseName}_H");
+            sb.AppendLine();
+            sb.AppendLine("#ifdef __cplusplus");
+            sb.AppendLine("extern \"C\" {");
+            sb.AppendLine("#endif");
+            sb.AppendLine();
+            sb.AppendLine("#include <stdint.h>");
+            sb.AppendLine("#include <stdbool.h>");
+            sb.AppendLine("#include <stddef.h>");
+            sb.AppendLine();
+            sb.AppendLine("/*===========================================================================*/");
+            sb.AppendLine("/*  PROTOCOL CONSTANTS                                                       */");
+            sb.AppendLine("/*===========================================================================*/");
+            sb.AppendLine();
+            sb.AppendLine("#define HW_PROTO_START_BYTE   0xAA");
+            sb.AppendLine("#define HW_PROTO_END_BYTE     0x55");
+            sb.AppendLine("#define HW_PROTO_VERSION      0x01");
+            sb.AppendLine();
+            sb.AppendLine("/*===========================================================================*/");
+            sb.AppendLine("/*  SENSOR IDENTIFIERS                                                       */");
+            sb.AppendLine("/*===========================================================================*/");
+            sb.AppendLine();
+            sb.AppendLine("typedef enum {");
+
+            // Group by category for readability
+            var grouped = sensors.GroupBy(s => GetCategory(s.sensor)).OrderBy(g => g.Key);
+
+            foreach (var group in grouped)
+            {
+                sb.AppendLine($"    /* ---- {group.Key} Sensors ---- */");
+                foreach (var (sensor, enumName, funcName, id) in group)
+                {
+                    var comment = $"{sensor.Hardware} / {sensor.Name}";
+                    if (comment.Length > 45) comment = comment.Substring(0, 42) + "...";
+                    sb.AppendLine($"    {enumName,-45} = 0x{id:X2},  /* {comment} */");
+                }
+                sb.AppendLine();
+            }
+
+            sb.AppendLine("    SENSOR_ID_UNKNOWN = 0xFF");
+            sb.AppendLine("} hw_sensor_id_t;");
+            sb.AppendLine();
+            sb.AppendLine($"#define HW_SENSOR_COUNT  {sensors.Count}");
+            sb.AppendLine();
+            sb.AppendLine("/*===========================================================================*/");
+            sb.AppendLine("/*  DATA STRUCTURES                                                          */");
+            sb.AppendLine("/*===========================================================================*/");
+            sb.AppendLine();
+            sb.AppendLine("/**");
+            sb.AppendLine(" * @brief Sensor data container");
+            sb.AppendLine(" */");
+            sb.AppendLine("typedef struct {");
+            sb.AppendLine("    hw_sensor_id_t id;        /**< Sensor identifier */");
+            sb.AppendLine("    float          value;     /**< Current value */");
+            sb.AppendLine("    bool           valid;     /**< Data validity flag */");
+            sb.AppendLine("    uint32_t       timestamp; /**< Last update time (ms) */");
+            sb.AppendLine("} hw_sensor_t;");
+            sb.AppendLine();
+            sb.AppendLine("/*===========================================================================*/");
+            sb.AppendLine("/*  GLOBAL DATA                                                              */");
+            sb.AppendLine("/*===========================================================================*/");
+            sb.AppendLine();
+            sb.AppendLine("extern hw_sensor_t hw_sensors[HW_SENSOR_COUNT];");
+            sb.AppendLine();
+            sb.AppendLine("/*===========================================================================*/");
+            sb.AppendLine("/*  FUNCTION PROTOTYPES                                                      */");
+            sb.AppendLine("/*===========================================================================*/");
+            sb.AppendLine();
+            sb.AppendLine("/**");
+            sb.AppendLine(" * @brief Initialize all sensors to default state");
+            sb.AppendLine(" */");
+            sb.AppendLine("void hw_sensors_init(void);");
+            sb.AppendLine();
+            sb.AppendLine("/**");
+            sb.AppendLine(" * @brief Parse incoming binary packet");
+            sb.AppendLine(" * @param data Pointer to packet buffer");
+            sb.AppendLine(" * @param len  Length of packet");
+            sb.AppendLine(" * @return true if packet was valid and parsed");
+            sb.AppendLine(" */");
+            sb.AppendLine("bool hw_sensors_parse(const uint8_t* data, size_t len);");
+            sb.AppendLine();
+            sb.AppendLine("/**");
+            sb.AppendLine(" * @brief Get sensor value by ID");
+            sb.AppendLine(" * @param id Sensor identifier");
+            sb.AppendLine(" * @return Sensor value or -999. 0f if invalid/not found");
+            sb.AppendLine(" */");
+            sb.AppendLine("float hw_sensors_get_value(hw_sensor_id_t id);");
+            sb.AppendLine();
+            sb.AppendLine("/**");
+            sb.AppendLine(" * @brief Check if sensor has valid data");
+            sb.AppendLine(" * @param id Sensor identifier");
+            sb.AppendLine(" * @return true if sensor data is valid");
+            sb.AppendLine(" */");
+            sb.AppendLine("bool hw_sensors_is_valid(hw_sensor_id_t id);");
+            sb.AppendLine();
+            sb.AppendLine("/**");
+            sb.AppendLine(" * @brief Get sensor name string");
+            sb.AppendLine(" * @param id Sensor identifier");
+            sb.AppendLine(" * @return Sensor name or \"Unknown\"");
+            sb.AppendLine(" */");
+            sb.AppendLine("const char* hw_sensors_get_name(hw_sensor_id_t id);");
+            sb.AppendLine();
+            sb.AppendLine("/**");
+            sb.AppendLine(" * @brief Get sensor unit string");
+            sb.AppendLine(" * @param id Sensor identifier");
+            sb.AppendLine(" * @return Unit string (°C, %, MHz, etc.)");
+            sb.AppendLine(" */");
+            sb.AppendLine("const char* hw_sensors_get_unit(hw_sensor_id_t id);");
+            sb.AppendLine();
+            sb.AppendLine("/**");
+            sb.AppendLine(" * @brief Invalidate all sensor data (call on timeout)");
+            sb.AppendLine(" */");
+            sb.AppendLine("void hw_sensors_invalidate_all(void);");
+            sb.AppendLine();
+            sb.AppendLine("/*===========================================================================*/");
+            sb.AppendLine("/*  CONVENIENCE GETTER FUNCTIONS                                             */");
+            sb.AppendLine("/*===========================================================================*/");
+            sb.AppendLine();
+
+            foreach (var (sensor, enumName, funcName, id) in sensors)
+            {
+                sb.AppendLine($"/** @brief Get {sensor.Name} value */");
+                sb.AppendLine($"static inline float {funcName}(void) {{ return hw_sensors_get_value({enumName}); }}");
+                sb.AppendLine();
+            }
+
+            sb.AppendLine("#ifdef __cplusplus");
+            sb.AppendLine("}");
+            sb.AppendLine("#endif");
+            sb.AppendLine();
+            sb.AppendLine($"#endif /* {baseName}_H */");
+
+            return sb.ToString();
+        }
+
+        private string GenerateSourceContent(List<(SensorInfo sensor, string enumName, string funcName, byte id)> sensors, string headerFile, string baseName)
+        {
+            var sb = new StringBuilder();
+
+            sb.AppendLine("/**");
+            sb.AppendLine($" * @file {Path.ChangeExtension(headerFile, ".c")}");
+            sb.AppendLine($" * @brief Hardware Monitor Sensor Implementation");
+            sb.AppendLine($" * @date {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+            sb.AppendLine($" * @note Auto-generated - DO NOT EDIT MANUALLY");
+            sb.AppendLine(" */");
+            sb.AppendLine();
+            sb.AppendLine($"#include \"{headerFile}\"");
+            sb.AppendLine("#include <string.h>");
+            sb.AppendLine();
+            sb.AppendLine("/*===========================================================================*/");
+            sb.AppendLine("/*  GLOBAL DATA                                                              */");
+            sb.AppendLine("/*===========================================================================*/");
+            sb.AppendLine();
+            sb.AppendLine("hw_sensor_t hw_sensors[HW_SENSOR_COUNT];");
+            sb.AppendLine();
+            sb.AppendLine("/*===========================================================================*/");
+            sb.AppendLine("/*  INITIALIZATION                                                           */");
+            sb.AppendLine("/*===========================================================================*/");
+            sb.AppendLine();
+            sb.AppendLine("void hw_sensors_init(void)");
+            sb.AppendLine("{");
+            sb.AppendLine("    memset(hw_sensors, 0, sizeof(hw_sensors));");
+            sb.AppendLine("    for (int i = 0; i < HW_SENSOR_COUNT; i++) {");
+            sb.AppendLine("        hw_sensors[i].id = SENSOR_ID_UNKNOWN;");
             sb.AppendLine("        hw_sensors[i].value = -999.0f;");
             sb.AppendLine("        hw_sensors[i].valid = false;");
             sb.AppendLine("        hw_sensors[i].timestamp = 0;");
             sb.AppendLine("    }");
             sb.AppendLine("}");
             sb.AppendLine();
-            sb.AppendLine("/* ========================================");
-            sb.AppendLine("   Packet Parser");
-            sb.AppendLine("   ======================================== */");
+            sb.AppendLine("/*===========================================================================*/");
+            sb.AppendLine("/*  PACKET PARSER                                                            */");
+            sb.AppendLine("/*===========================================================================*/");
             sb.AppendLine();
-            sb.AppendLine("bool hw_sensors_parse(const uint8_t* data, size_t len) {");
-            sb.AppendLine("    if (! data || len < 6) return false;");
-            sb.AppendLine("    if (data[0] != HW_PROTO_START) return false;");
-            sb.AppendLine("    if (data[1] != HW_PROTO_VERSION) return false;");
+            sb.AppendLine("bool hw_sensors_parse(const uint8_t* data, size_t len)");
+            sb.AppendLine("{");
+            sb.AppendLine("    /* Validate minimum length */");
+            sb.AppendLine("    if (! data || len < 6) {");
+            sb.AppendLine("        return false;");
+            sb.AppendLine("    }");
             sb.AppendLine();
+            sb.AppendLine("    /* Check start byte */");
+            sb.AppendLine("    if (data[0] != HW_PROTO_START_BYTE) {");
+            sb.AppendLine("        return false;");
+            sb.AppendLine("    }");
+            sb.AppendLine();
+            sb.AppendLine("    /* Check protocol version */");
+            sb.AppendLine("    if (data[1] != HW_PROTO_VERSION) {");
+            sb.AppendLine("        return false;");
+            sb.AppendLine("    }");
+            sb.AppendLine();
+            sb.AppendLine("    /* Get sensor count */");
             sb.AppendLine("    uint8_t count = data[2];");
-            sb.AppendLine("    size_t expected = 3 + (count * 5) + 3;  /* header + data + crc + end */");
-            sb.AppendLine("    if (len < expected) return false;");
-            sb.AppendLine("    if (data[len - 1] != HW_PROTO_END) return false;");
+            sb.AppendLine("    size_t expected_len = 3 + (count * 5) + 3;  /* header + data + crc + end */");
             sb.AppendLine();
-            sb.AppendLine("    /* TODO: Verify CRC16 at data[len-3], data[len-2] */");
+            sb.AppendLine("    if (len < expected_len) {");
+            sb.AppendLine("        return false;");
+            sb.AppendLine("    }");
             sb.AppendLine();
+            sb.AppendLine("    /* Check end byte */");
+            sb.AppendLine("    if (data[expected_len - 1] != HW_PROTO_END_BYTE) {");
+            sb.AppendLine("        return false;");
+            sb.AppendLine("    }");
+            sb.AppendLine();
+            sb.AppendLine("    /* TODO: Verify CRC16 at data[expected_len-3] and data[expected_len-2] */");
+            sb.AppendLine();
+            sb.AppendLine("    /* Parse sensor data */");
             sb.AppendLine("    size_t offset = 3;");
             sb.AppendLine("    for (uint8_t i = 0; i < count && i < HW_SENSOR_COUNT; i++) {");
             sb.AppendLine("        hw_sensors[i]. id = (hw_sensor_id_t)data[offset];");
             sb.AppendLine();
-            sb.AppendLine("        /* Parse float (little-endian) */");
+            sb.AppendLine("        /* Parse IEEE 754 float (little-endian) */");
             sb.AppendLine("        union {");
             sb.AppendLine("            float f;");
             sb.AppendLine("            uint8_t b[4];");
-            sb.AppendLine("        } conv;");
-            sb.AppendLine("        conv.b[0] = data[offset + 1];");
-            sb.AppendLine("        conv.b[1] = data[offset + 2];");
-            sb.AppendLine("        conv.b[2] = data[offset + 3];");
-            sb.AppendLine("        conv. b[3] = data[offset + 4];");
+            sb.AppendLine("        } converter;");
             sb.AppendLine();
-            sb.AppendLine("        hw_sensors[i]. value = conv.f;");
+            sb.AppendLine("        converter.b[0] = data[offset + 1];");
+            sb.AppendLine("        converter. b[1] = data[offset + 2];");
+            sb.AppendLine("        converter.b[2] = data[offset + 3];");
+            sb.AppendLine("        converter.b[3] = data[offset + 4];");
+            sb.AppendLine();
+            sb.AppendLine("        hw_sensors[i].value = converter.f;");
             sb.AppendLine("        hw_sensors[i].valid = true;");
             sb.AppendLine("        /* hw_sensors[i]. timestamp = get_timestamp_ms(); */");
             sb.AppendLine();
@@ -1143,11 +1796,12 @@ namespace HardwareMonitorTray
             sb.AppendLine("    return true;");
             sb.AppendLine("}");
             sb.AppendLine();
-            sb.AppendLine("/* ========================================");
-            sb.AppendLine("   Getters");
-            sb.AppendLine("   ======================================== */");
+            sb.AppendLine("/*===========================================================================*/");
+            sb.AppendLine("/*  GETTERS                                                                  */");
+            sb.AppendLine("/*===========================================================================*/");
             sb.AppendLine();
-            sb.AppendLine("float hw_sensors_get(hw_sensor_id_t id) {");
+            sb.AppendLine("float hw_sensors_get_value(hw_sensor_id_t id)");
+            sb.AppendLine("{");
             sb.AppendLine("    for (int i = 0; i < HW_SENSOR_COUNT; i++) {");
             sb.AppendLine("        if (hw_sensors[i].id == id && hw_sensors[i].valid) {");
             sb.AppendLine("            return hw_sensors[i].value;");
@@ -1156,7 +1810,8 @@ namespace HardwareMonitorTray
             sb.AppendLine("    return -999.0f;");
             sb.AppendLine("}");
             sb.AppendLine();
-            sb.AppendLine("bool hw_sensors_valid(hw_sensor_id_t id) {");
+            sb.AppendLine("bool hw_sensors_is_valid(hw_sensor_id_t id)");
+            sb.AppendLine("{");
             sb.AppendLine("    for (int i = 0; i < HW_SENSOR_COUNT; i++) {");
             sb.AppendLine("        if (hw_sensors[i]. id == id) {");
             sb.AppendLine("            return hw_sensors[i].valid;");
@@ -1165,45 +1820,56 @@ namespace HardwareMonitorTray
             sb.AppendLine("    return false;");
             sb.AppendLine("}");
             sb.AppendLine();
-            sb.AppendLine("/* ========================================");
-            sb.AppendLine("   Metadata");
-            sb.AppendLine("   ======================================== */");
+            sb.AppendLine("void hw_sensors_invalidate_all(void)");
+            sb.AppendLine("{");
+            sb.AppendLine("    for (int i = 0; i < HW_SENSOR_COUNT; i++) {");
+            sb.AppendLine("        hw_sensors[i].valid = false;");
+            sb.AppendLine("    }");
+            sb.AppendLine("}");
             sb.AppendLine();
-            sb.AppendLine("const char* hw_sensors_name(hw_sensor_id_t id) {");
+            sb.AppendLine("/*===========================================================================*/");
+            sb.AppendLine("/*  METADATA                                                                 */");
+            sb.AppendLine("/*===========================================================================*/");
+            sb.AppendLine();
+            sb.AppendLine("const char* hw_sensors_get_name(hw_sensor_id_t id)");
+            sb.AppendLine("{");
             sb.AppendLine("    switch (id) {");
 
-            foreach (var sensor in sensors)
+            foreach (var (sensor, enumName, funcName, id) in sensors)
             {
-                var id = GetSensorId(sensor);
-                var enumName = $"SENSOR_{GetCategory(sensor)}_{sensor.Type.ToUpper()}";
-                if (id >= 0x80) enumName += $"_{id - 0x80}";
-                sb.AppendLine($"        case {enumName}:  return \"{sensor.Name}\";");
+                var name = sensor.Name.Replace("\"", "\\\"");
+                if (name.Length > 30) name = name.Substring(0, 27) + "...";
+                sb.AppendLine($"        case {enumName}:  return \"{name}\";");
             }
 
             sb.AppendLine("        default: return \"Unknown\";");
             sb.AppendLine("    }");
             sb.AppendLine("}");
             sb.AppendLine();
-            sb.AppendLine("const char* hw_sensors_unit(hw_sensor_id_t id) {");
+            sb.AppendLine("const char* hw_sensors_get_unit(hw_sensor_id_t id)");
+            sb.AppendLine("{");
             sb.AppendLine("    switch (id) {");
 
             // Group by unit
-            var byUnit = sensors.GroupBy(s => s.Unit ?? "");
+            var byUnit = sensors.GroupBy(s => s.sensor.Unit ?? "");
             foreach (var group in byUnit)
             {
-                foreach (var sensor in group)
+                foreach (var (sensor, enumName, funcName, id) in group)
                 {
-                    var id = GetSensorId(sensor);
-                    var enumName = $"SENSOR_{GetCategory(sensor)}_{sensor.Type.ToUpper()}";
-                    if (id >= 0x80) enumName += $"_{id - 0x80}";
                     sb.AppendLine($"        case {enumName}:");
                 }
-                sb.AppendLine($"            return \"{group.Key}\";");
+                var unit = group.Key.Replace("\"", "\\\"");
+                sb.AppendLine($"            return \"{unit}\";");
+                sb.AppendLine();
             }
 
             sb.AppendLine("        default: return \"\";");
             sb.AppendLine("    }");
             sb.AppendLine("}");
+            sb.AppendLine();
+            sb.AppendLine("/*===========================================================================*/");
+            sb.AppendLine("/*  END OF FILE                                                              */");
+            sb.AppendLine("/*===========================================================================*/");
 
             return sb.ToString();
         }

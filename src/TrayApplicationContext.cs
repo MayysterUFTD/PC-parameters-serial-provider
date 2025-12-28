@@ -80,35 +80,24 @@ namespace HardwareMonitorTray
         {
             try
             {
-                if (_serial.Mode == ProtocolMode.Json)
-                {
-                    var data = _monitor.GetSelectedData(_config.Config.SelectedSensors);
-                    _serial.SendRawData(JsonSerializer.Serialize(data, _jsonOpt));
-                }
-                else
-                {
-                    var sensors = _collector.CollectData(_config.Config.SelectedSensors);
-                    _serial.SendData(sensors);
+                var selectedCount = _config.Config.SelectedSensors.Count;
+                var sensors = _collector.CollectData(_config.Config.SelectedSensors);
 
-                    foreach (var sen in sensors)
-                    {
-                        switch (sen.Id)
-                        {
-                            case SensorId.CpuTemp: _lastCpuTemp = sen.Value; break;
-                            case SensorId.CpuLoad: _lastCpuLoad = sen.Value; break;
-                            case SensorId.GpuLoad: _lastGpuLoad = sen.Value; break;
-                        }
-                    }
+                // DEBUG - usuń po naprawieniu
+                System.Diagnostics.Debug.WriteLine($"[SEND] Selected: {selectedCount}, Collected:  {sensors.Count}");
+
+                if (sensors.Count == 0)
+                {
+                    System.Diagnostics.Debug.WriteLine("[SEND] No sensors to send!");
+                    return;
                 }
 
-                if (_config.Config.IconStyle != IconStyle.Animated)
-                    UpdateTrayIcon();
-
-                UpdateTooltip();
+                _serial.SendData(sensors);
+                // ... 
             }
-            catch
+            catch (Exception ex)
             {
-                UpdateIcon(_iconMgr.CreateStatusIcon(TrayIconManager.IconState.Error));
+                System.Diagnostics.Debug.WriteLine($"[SEND ERROR] {ex.Message}");
             }
         }
 

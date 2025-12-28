@@ -1,0 +1,11 @@
+idf_component_register(
+    SRCS 
+        "main.c"
+        "hw_monitor.c"
+    INCLUDE_DIRS 
+        "."
+    REQUIRES
+        tinyusb
+        driver
+        esp_timer
+)
