@@ -176,7 +176,7 @@ dotnet publish -c Release -r win-x64 --self-contained true
 ## Dependencies
 
 - [LibreHardwareMonitorLib](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) - Hardware monitoring library
-- [System.IO.Ports](https://www.nuget.org/packages/System.IO. Ports) - Serial port communication
+- [System.IO.Ports](https://www.nuget.org/packages/System.IO.Ports) - Serial port communication
 
 ## License
 
