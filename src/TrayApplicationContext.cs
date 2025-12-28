@@ -10,348 +10,255 @@ namespace HardwareMonitorTray
     public class TrayApplicationContext : ApplicationContext
     {
         private NotifyIcon _trayIcon;
-        private ContextMenuStrip _contextMenu;
-        private HardwareMonitorService _monitorService;
-        private SerialPortService _serialService;
-        private SensorDataCollector _dataCollector;
-        private ConfigManager _configManager;
-        private TrayIconManager _iconManager;
+        private ContextMenuStrip _menu;
+        private HardwareMonitorService _monitor;
+        private SerialPortService _serial;
+        private SensorDataCollector _collector;
+        private ConfigManager _config;
+        private TrayIconManager _iconMgr;
         private System.Windows.Forms.Timer _sendTimer;
-        private System.Windows.Forms.Timer _iconAnimationTimer;
-        private bool _isRunning = false;
-        private JsonSerializerOptions _jsonOptions;
-        private int _animationFrame = 0;
-        private float _lastCpuTemp = 0;
-        private float _lastCpuLoad = 0;
-        private float _lastGpuLoad = 0;
+        private System.Windows.Forms.Timer _iconTimer;
+        private bool _running = false;
+        private int _animFrame = 0;
+        private float _lastCpuTemp = 0, _lastCpuLoad = 0, _lastGpuLoad = 0;
+        private JsonSerializerOptions _jsonOpt;
 
         public TrayApplicationContext()
         {
-            _configManager = new ConfigManager();
-            _monitorService = new HardwareMonitorService();
-            _serialService = new SerialPortService();
-            _dataCollector = new SensorDataCollector(_monitorService);
-            _iconManager = new TrayIconManager();
+            _config = new ConfigManager();
+            _monitor = new HardwareMonitorService();
+            _serial = new SerialPortService { Mode = _config.Config.ProtocolMode };
+            _collector = new SensorDataCollector(_monitor);
+            _iconMgr = new TrayIconManager();
 
-            _serialService.Mode = _configManager.Config.ProtocolMode;
-
-            _jsonOptions = new JsonSerializerOptions
+            _jsonOpt = new JsonSerializerOptions
             {
                 NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals,
                 WriteIndented = false
             };
 
-            InitializeTrayIcon();
-            InitializeTimers();
+            InitTray();
+            InitTimers();
 
-            if (_configManager.Config.AutoStart)
-            {
+            if (_config.Config.AutoStart)
                 StartMonitoring();
-            }
         }
 
-        private void InitializeTrayIcon()
+        private void InitTray()
         {
-            _contextMenu = new ContextMenuStrip();
+            _menu = new ContextMenuStrip();
 
-            var startStopItem = new ToolStripMenuItem("▶️ Start/Stop", null, OnStartStopClick)
+            var startItem = new ToolStripMenuItem("▶ Start/Stop", null, OnStartStop) { Font = new Font(_menu.Font, FontStyle.Bold) };
+            _menu.Items.Add(startItem);
+            _menu.Items.Add(new ToolStripSeparator());
+            _menu.Items.Add(new ToolStripMenuItem("⚙ Settings", null, OnSettings));
+            _menu.Items.Add(new ToolStripMenuItem("📊 Statistics", null, OnStats));
+            _menu.Items.Add(new ToolStripMenuItem("📌 Pin to Taskbar", null, OnPin));
+            _menu.Items.Add(new ToolStripSeparator());
+            _menu.Items.Add(new ToolStripMenuItem("❌ Exit", null, OnExit));
+
+            _trayIcon = new NotifyIcon
             {
-                Font = new Font(_contextMenu.Font, FontStyle.Bold)
-            };
-            _contextMenu.Items.Add(startStopItem);
-
-            _contextMenu.Items.Add(new ToolStripSeparator());
-
-            var settingsItem = new ToolStripMenuItem("⚙️ Settings", null, OnSettingsClick);
-            _contextMenu.Items.Add(settingsItem);
-
-            var statsItem = new ToolStripMenuItem("📊 Statistics", null, OnStatisticsClick);
-            _contextMenu.Items.Add(statsItem);
-
-            _contextMenu.Items.Add(new ToolStripSeparator());
-
-            // Nowa opcja - przypnij ikonę
-            var pinIconItem = new ToolStripMenuItem("📌 Pin to Taskbar", null, OnPinIconClick);
-            _contextMenu.Items.Add(pinIconItem);
-
-            _contextMenu.Items.Add(new ToolStripSeparator());
-
-            var exitItem = new ToolStripMenuItem("❌ Exit", null, OnExitClick);
-            _contextMenu.Items.Add(exitItem);
-
-            _trayIcon = new NotifyIcon()
-            {
-                Icon = _iconManager.CreateModernIcon(false),
-                ContextMenuStrip = _contextMenu,
+                Icon = _iconMgr.CreateModernIcon(false),
+                ContextMenuStrip = _menu,
                 Visible = true,
                 Text = "Hardware Monitor - Stopped"
             };
+            _trayIcon.DoubleClick += OnSettings;
+        }
 
-            _trayIcon.DoubleClick += OnSettingsClick;
+        private void InitTimers()
+        {
+            _sendTimer = new System.Windows.Forms.Timer { Interval = _config.Config.SendIntervalMs };
+            _sendTimer.Tick += OnSendTick;
 
-            // Przy pierwszym uruchomieniu pokaż instrukcję
-            if (_configManager.Config.FirstRun)
+            _iconTimer = new System.Windows.Forms.Timer { Interval = 500 };
+            _iconTimer.Tick += OnIconTick;
+        }
+
+        private void OnSendTick(object s, EventArgs e)
+        {
+            try
             {
-                _configManager.Config.FirstRun = false;
-                _configManager.SaveConfig();
+                if (_serial.Mode == ProtocolMode.Json)
+                {
+                    var data = _monitor.GetSelectedData(_config.Config.SelectedSensors);
+                    _serial.SendRawData(JsonSerializer.Serialize(data, _jsonOpt));
+                }
+                else
+                {
+                    var sensors = _collector.CollectData(_config.Config.SelectedSensors);
+                    _serial.SendData(sensors);
 
-                _trayIcon.ShowBalloonTip(5000, "💡 Tip",
-                    "Right-click the tray icon and select 'Pin to Taskbar' to keep it visible.",
-                    ToolTipIcon.Info);
+                    foreach (var sen in sensors)
+                    {
+                        switch (sen.Id)
+                        {
+                            case SensorId.CpuTemp: _lastCpuTemp = sen.Value; break;
+                            case SensorId.CpuLoad: _lastCpuLoad = sen.Value; break;
+                            case SensorId.GpuLoad: _lastGpuLoad = sen.Value; break;
+                        }
+                    }
+                }
+
+                if (_config.Config.IconStyle != IconStyle.Animated)
+                    UpdateTrayIcon();
+
+                UpdateTooltip();
+            }
+            catch
+            {
+                UpdateIcon(_iconMgr.CreateStatusIcon(TrayIconManager.IconState.Error));
             }
         }
 
-        private void OnPinIconClick(object sender, EventArgs e)
+        private void OnIconTick(object s, EventArgs e)
         {
-            var result = MessageBox.Show(
-                "Would you like to open Taskbar Settings to pin the icon?\n\n" +
-                "Click 'Yes' to open settings, or 'No' for instructions.",
-                "📌 Pin Icon to Taskbar",
-                MessageBoxButtons.YesNoCancel,
-                MessageBoxIcon.Question);
-
-            if (result == DialogResult.Yes)
+            if (_running && _config.Config.IconStyle == IconStyle.Animated)
             {
-                TrayIconHelper.OpenTaskbarSettings();
-            }
-            else if (result == DialogResult.No)
-            {
-                TrayIconHelper.ShowPinInstructions();
-            }
-        }
-
-        private void InitializeTimers()
-        {
-            _sendTimer = new System.Windows.Forms.Timer();
-            _sendTimer.Interval = _configManager.Config.SendIntervalMs;
-            _sendTimer.Tick += OnTimerTick;
-
-            _iconAnimationTimer = new System.Windows.Forms.Timer();
-            _iconAnimationTimer.Interval = 500;
-            _iconAnimationTimer.Tick += OnIconAnimationTick;
-        }
-
-        private void OnIconAnimationTick(object sender, EventArgs e)
-        {
-            if (_isRunning && _configManager.Config.IconStyle == IconStyle.Animated)
-            {
-                _animationFrame++;
-                var icon = _iconManager.CreatePulseIcon(_animationFrame);
-                UpdateIcon(icon);
+                _animFrame++;
+                UpdateIcon(_iconMgr.CreatePulseIcon(_animFrame));
             }
         }
 
         private void UpdateTrayIcon()
         {
-            var style = _configManager.Config.IconStyle;
-            Icon newIcon;
-
-            if (!_isRunning)
-            {
-                newIcon = style switch
+            var style = _config.Config.IconStyle;
+            Icon icon = !_running
+                ? (style == IconStyle.Modern ? _iconMgr.CreateModernIcon(false) : _iconMgr.CreateStatusIcon(TrayIconManager.IconState.Stopped))
+                : style switch
                 {
-                    IconStyle.Modern => _iconManager.CreateModernIcon(false),
-                    _ => _iconManager.CreateStatusIcon(TrayIconManager.IconState.Stopped)
+                    IconStyle.Temperature => _iconMgr.CreateTemperatureIcon(_lastCpuTemp),
+                    IconStyle.LoadBars => _iconMgr.CreateLoadIcon(_lastCpuLoad, _lastGpuLoad),
+                    IconStyle.Modern => _iconMgr.CreateModernIcon(true, _lastCpuTemp),
+                    IconStyle.Animated => _iconMgr.CreatePulseIcon(_animFrame),
+                    _ => GetStatusByTemp()
                 };
-            }
-            else
-            {
-                newIcon = style switch
-                {
-                    IconStyle.Temperature => _iconManager.CreateTemperatureIcon(_lastCpuTemp),
-                    IconStyle.LoadBars => _iconManager.CreateLoadIcon(_lastCpuLoad, _lastGpuLoad),
-                    IconStyle.Modern => _iconManager.CreateModernIcon(true, _lastCpuTemp),
-                    IconStyle.Animated => _iconManager.CreatePulseIcon(_animationFrame),
-                    _ => GetStatusIconByTemp(_lastCpuTemp)
-                };
-            }
-
-            UpdateIcon(newIcon);
+            UpdateIcon(icon);
         }
 
-        private Icon GetStatusIconByTemp(float temp)
-        {
-            if (temp >= 85)
-                return _iconManager.CreateStatusIcon(TrayIconManager.IconState.Hot);
-            else if (temp >= 75)
-                return _iconManager.CreateStatusIcon(TrayIconManager.IconState.Warning);
-            else
-                return _iconManager.CreateStatusIcon(TrayIconManager.IconState.Running);
-        }
+        private Icon GetStatusByTemp() =>
+            _lastCpuTemp >= 85 ? _iconMgr.CreateStatusIcon(TrayIconManager.IconState.Hot) :
+            _lastCpuTemp >= 75 ? _iconMgr.CreateStatusIcon(TrayIconManager.IconState.Warning) :
+            _iconMgr.CreateStatusIcon(TrayIconManager.IconState.Running);
 
         private void UpdateIcon(Icon newIcon)
         {
-            var oldIcon = _trayIcon.Icon;
+            var old = _trayIcon.Icon;
             _trayIcon.Icon = newIcon;
-
-            if (oldIcon != null && oldIcon != SystemIcons.Application && oldIcon != SystemIcons.Shield)
-            {
-                try { oldIcon.Dispose(); } catch { }
-            }
-        }
-
-        private void OnTimerTick(object sender, EventArgs e)
-        {
-            try
-            {
-                if (_serialService.Mode == ProtocolMode.Json)
-                {
-                    var data = _monitorService.GetSelectedSensorData(_configManager.Config.SelectedSensors);
-                    var json = JsonSerializer.Serialize(data, _jsonOptions);
-                    _serialService.SendRawData(json);
-                }
-                else
-                {
-                    var sensors = _dataCollector.CollectData(_configManager.Config.SelectedSensors);
-                    _serialService.SendData(sensors);
-
-                    foreach (var sensor in sensors)
-                    {
-                        switch (sensor.Id)
-                        {
-                            case SensorId.CpuTemp:
-                                _lastCpuTemp = sensor.Value;
-                                break;
-                            case SensorId.CpuLoad:
-                                _lastCpuLoad = sensor.Value;
-                                break;
-                            case SensorId.GpuLoad:
-                                _lastGpuLoad = sensor.Value;
-                                break;
-                        }
-                    }
-                }
-
-                if (_configManager.Config.IconStyle != IconStyle.Animated)
-                {
-                    UpdateTrayIcon();
-                }
-
-                UpdateTooltip();
-            }
-            catch (Exception ex)
-            {
-                var icon = _iconManager.CreateStatusIcon(TrayIconManager.IconState.Error);
-                UpdateIcon(icon);
-                _trayIcon.ShowBalloonTip(3000, "Error", ex.Message, ToolTipIcon.Error);
-            }
+            if (old != null && old != SystemIcons.Application)
+                try { old.Dispose(); } catch { }
         }
 
         private void UpdateTooltip()
         {
-            string modeText = _serialService.Mode switch
-            {
-                ProtocolMode.Binary => "BIN",
-                ProtocolMode.Text => "TXT",
-                _ => "JSON"
-            };
-
-            string tooltip = $"Hardware Monitor - {_configManager.Config.ComPort} [{modeText}]\n";
-
-            if (_lastCpuTemp > 0)
-                tooltip += $"CPU:  {_lastCpuTemp:F0}°C ({_lastCpuLoad:F0}%)\n";
-            if (_lastGpuLoad > 0)
-                tooltip += $"GPU:  {_lastGpuLoad:F0}%";
-
-            if (tooltip.Length > 63)
-                tooltip = tooltip.Substring(0, 63);
-
-            _trayIcon.Text = tooltip;
+            var mode = _serial.Mode == ProtocolMode.Binary ? "BIN" : _serial.Mode == ProtocolMode.Text ? "TXT" : "JSON";
+            var tip = $"Hardware Monitor - {_config.Config.ComPort} [{mode}]";
+            if (_lastCpuTemp > 0) tip += $"\nCPU: {_lastCpuTemp:0}°C ({_lastCpuLoad:0}%)";
+            if (_lastGpuLoad > 0) tip += $"\nGPU: {_lastGpuLoad:0}%";
+            _trayIcon.Text = tip.Length > 63 ? tip.Substring(0, 63) : tip;
         }
 
-        private void OnStatisticsClick(object sender, EventArgs e)
-        {
-            var stats = $"📡 Protocol: {_serialService.Mode}\n" +
-                        $"🎨 Icon Style: {_configManager.Config.IconStyle}\n\n" +
-                        $"📤 Packets Sent: {_serialService.PacketsSent}\n" +
-                        $"❌ Errors: {_serialService.PacketsErrors}\n" +
-                        $"✅ Success Rate: {_serialService.SuccessRate:F1}%\n\n" +
-                        $"🔧 Sensors Selected: {_configManager.Config.SelectedSensors.Count}\n" +
-                        $"⏱️ Send Interval: {_configManager.Config.SendIntervalMs}ms\n\n" +
-                        $"🌡️ CPU Temp: {_lastCpuTemp: F1}°C\n" +
-                        $"📊 CPU Load:  {_lastCpuLoad:F1}%\n" +
-                        $"🎮 GPU Load: {_lastGpuLoad:F1}%";
-
-            MessageBox.Show(stats, "📊 Statistics", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        }
-
-        private void StartMonitoring()
+        public void StartMonitoring()
         {
             try
             {
-                _serialService.Connect(_configManager.Config.ComPort, _configManager.Config.BaudRate);
-                _serialService.Mode = _configManager.Config.ProtocolMode;
+                _serial.Connect(_config.Config.ComPort, _config.Config.BaudRate);
+                _serial.Mode = _config.Config.ProtocolMode;
+                _sendTimer.Interval = _config.Config.SendIntervalMs;
                 _sendTimer.Start();
 
-                if (_configManager.Config.IconStyle == IconStyle.Animated)
-                {
-                    _iconAnimationTimer.Start();
-                }
+                if (_config.Config.IconStyle == IconStyle.Animated)
+                    _iconTimer.Start();
 
-                _isRunning = true;
+                _running = true;
                 UpdateTrayIcon();
-                UpdateTooltip();
-
-                _trayIcon.ShowBalloonTip(2000, "🖥️ Hardware Monitor",
-                    $"Started on {_configManager.Config.ComPort} [{_serialService.Mode}]", ToolTipIcon.Info);
+                _trayIcon.ShowBalloonTip(2000, "Hardware Monitor", $"Started on {_config.Config.ComPort}", ToolTipIcon.Info);
             }
             catch (Exception ex)
             {
-                var icon = _iconManager.CreateStatusIcon(TrayIconManager.IconState.Error);
-                UpdateIcon(icon);
-
-                MessageBox.Show($"Failed to start:  {ex.Message}", "Error",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                UpdateIcon(_iconMgr.CreateStatusIcon(TrayIconManager.IconState.Error));
+                MessageBox.Show($"Failed to start:  {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
-        private void StopMonitoring()
+        public void StopMonitoring()
         {
             _sendTimer.Stop();
-            _iconAnimationTimer.Stop();
-            _serialService.Disconnect();
-            _isRunning = false;
-
+            _iconTimer.Stop();
+            _serial.Disconnect();
+            _running = false;
             UpdateTrayIcon();
             _trayIcon.Text = "Hardware Monitor - Stopped";
         }
 
-        private void OnStartStopClick(object sender, EventArgs e)
+        public void ToggleMonitoring(bool start)
         {
-            if (_isRunning)
-                StopMonitoring();
-            else
+            if (start && !_running)
                 StartMonitoring();
+            else if (!start && _running)
+                StopMonitoring();
         }
 
-        private void OnSettingsClick(object sender, EventArgs e)
+        public bool IsMonitoringRunning() => _running;
+
+        private void OnStartStop(object s, EventArgs e)
         {
-            var wasRunning = _isRunning;
-            if (wasRunning) StopMonitoring();
+            if (_running) StopMonitoring();
+            else StartMonitoring();
+        }
 
-            using (var settingsForm = new SettingsForm(_configManager, _monitorService))
+        private void OnSettings(object s, EventArgs e)
+        {
+            // Przekazujemy callbacki do kontroli monitorowania z okna Settings
+            using var form = new SettingsForm(
+                _config,
+                _monitor,
+                ToggleMonitoring,      // Action<bool> - start/stop
+                IsMonitoringRunning    // Func<bool> - czy działa
+            );
+
+            if (form.ShowDialog() == DialogResult.OK)
             {
-                if (settingsForm.ShowDialog() == DialogResult.OK)
+                // Zaktualizuj ustawienia jeśli monitoring działa
+                if (_running)
                 {
-                    _sendTimer.Interval = _configManager.Config.SendIntervalMs;
-                    _serialService.Mode = _configManager.Config.ProtocolMode;
+                    _sendTimer.Interval = _config.Config.SendIntervalMs;
+                    _serial.Mode = _config.Config.ProtocolMode;
 
-                    // Restart animation timer if needed
-                    if (_configManager.Config.IconStyle == IconStyle.Animated && wasRunning)
-                    {
-                        _iconAnimationTimer.Start();
-                    }
+                    // Restart jeśli zmieniono port
+                    // (opcjonalnie można dodać logikę sprawdzającą)
                 }
             }
-
-            if (wasRunning) StartMonitoring();
         }
 
-        private void OnExitClick(object sender, EventArgs e)
+        private void OnStats(object s, EventArgs e)
+        {
+            var msg = $"📡 Protocol: {_serial.Mode}\n" +
+                      $"📤 Sent: {_serial.PacketsSent}\n" +
+                      $"❌ Errors: {_serial.PacketsErrors}\n" +
+                      $"✅ Success: {_serial.SuccessRate:0.0}%\n\n" +
+                      $"🌡 CPU: {_lastCpuTemp: 0.0}°C\n" +
+                      $"📊 CPU Load: {_lastCpuLoad: 0.0}%\n" +
+                      $"🎮 GPU Load: {_lastGpuLoad:0.0}%";
+            MessageBox.Show(msg, "Statistics", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        private void OnPin(object s, EventArgs e)
+        {
+            MessageBox.Show(
+                "To keep the icon visible:\n\n" +
+                "1. Click ▲ in the taskbar\n" +
+                "2. Drag the Hardware Monitor icon to the taskbar\n\n" +
+                "Or:  Right-click taskbar → Taskbar settings → Select icons",
+                "📌 Pin to Taskbar", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        private void OnExit(object s, EventArgs e)
         {
             StopMonitoring();
-            _monitorService.Dispose();
-            _iconManager.Dispose();
+            _monitor.Dispose();
+            _iconMgr.Dispose();
             _trayIcon.Visible = false;
             Application.Exit();
         }

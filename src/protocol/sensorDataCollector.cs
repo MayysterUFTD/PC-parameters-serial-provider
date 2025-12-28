@@ -4,9 +4,6 @@ using System.Linq;
 
 namespace HardwareMonitorTray.Protocol
 {
-    /// <summary>
-    /// Collects and validates sensor data, converts to compact format
-    /// </summary>
     public class SensorDataCollector
     {
         private readonly HardwareMonitorService _monitorService;
@@ -16,13 +13,10 @@ namespace HardwareMonitorTray.Protocol
             _monitorService = monitorService;
         }
 
-        /// <summary>
-        /// Collects selected sensors and converts to compact format
-        /// </summary>
         public List<CompactSensorData> CollectData(List<string> selectedSensorIds)
         {
             var result = new List<CompactSensorData>();
-            var allSensors = _monitorService.GetAllSensors();
+            var allSensors = _monitorService.GetSensors(); // Zmienione z GetAllSensors()
             var addedIds = new HashSet<SensorId>();
 
             foreach (var sensorId in selectedSensorIds)
@@ -39,7 +33,6 @@ namespace HardwareMonitorTray.Protocol
                 if (compactId == SensorId.Unknown)
                     continue;
 
-                // Skip duplicates (only first sensor of each type)
                 if (addedIds.Contains(compactId))
                     continue;
 
@@ -73,13 +66,13 @@ namespace HardwareMonitorTray.Protocol
             var name = sensor.Name.ToLowerInvariant();
             var type = sensor.Type.ToLowerInvariant();
 
-            // CPU Sensors
+            // CPU
             if (IsCpu(hardware))
             {
                 if (type == "temperature")
                 {
                     if (name.Contains("package") || name.Contains("tctl") ||
-                        name.Contains("tdie") || name.Contains("core #1"))
+                        name.Contains("tdie") || name.Contains("core"))
                         return SensorId.CpuTemp;
                 }
                 else if (type == "load")
@@ -103,8 +96,7 @@ namespace HardwareMonitorTray.Protocol
                         return SensorId.CpuVoltage;
                 }
             }
-
-            // GPU Sensors
+            // GPU
             else if (IsGpu(hardware))
             {
                 if (type == "temperature")
@@ -140,8 +132,7 @@ namespace HardwareMonitorTray.Protocol
                     return SensorId.GpuFan;
                 }
             }
-
-            // RAM Sensors
+            // RAM
             else if (IsMemory(hardware))
             {
                 if (type == "load" && name.Contains("memory"))
@@ -154,8 +145,7 @@ namespace HardwareMonitorTray.Protocol
                         return SensorId.RamAvailable;
                 }
             }
-
-            // Storage Sensors
+            // Storage
             else if (IsStorage(hardware))
             {
                 if (type == "temperature")
@@ -170,8 +160,7 @@ namespace HardwareMonitorTray.Protocol
                         return SensorId.DiskWrite;
                 }
             }
-
-            // Network Sensors
+            // Network
             else if (IsNetwork(hardware))
             {
                 if (type == "throughput")
@@ -182,8 +171,7 @@ namespace HardwareMonitorTray.Protocol
                         return SensorId.NetDownload;
                 }
             }
-
-            // Motherboard Sensors
+            // Motherboard
             else if (IsMotherboard(hardware))
             {
                 if (type == "temperature")
@@ -202,66 +190,11 @@ namespace HardwareMonitorTray.Protocol
             return SensorId.Unknown;
         }
 
-        private bool IsCpu(string hardware)
-        {
-            return hardware.Contains("cpu") ||
-                   hardware.Contains("ryzen") ||
-                   hardware.Contains("intel") ||
-                   hardware.Contains("core i") ||
-                   hardware.Contains("processor");
-        }
-
-        private bool IsGpu(string hardware)
-        {
-            return hardware.Contains("gpu") ||
-                   hardware.Contains("nvidia") ||
-                   hardware.Contains("radeon") ||
-                   hardware.Contains("geforce") ||
-                   hardware.Contains("rtx") ||
-                   hardware.Contains("gtx") ||
-                   hardware.Contains("amd radeon") ||
-                   hardware.Contains("intel arc");
-        }
-
-        private bool IsMemory(string hardware)
-        {
-            return hardware.Contains("memory") ||
-                   hardware.Contains("ram") ||
-                   hardware.Contains("generic memory");
-        }
-
-        private bool IsStorage(string hardware)
-        {
-            return hardware.Contains("ssd") ||
-                   hardware.Contains("hdd") ||
-                   hardware.Contains("nvme") ||
-                   hardware.Contains("disk") ||
-                   hardware.Contains("drive") ||
-                   hardware.Contains("samsung") ||
-                   hardware.Contains("wd") ||
-                   hardware.Contains("seagate") ||
-                   hardware.Contains("kingston");
-        }
-
-        private bool IsNetwork(string hardware)
-        {
-            return hardware.Contains("network") ||
-                   hardware.Contains("ethernet") ||
-                   hardware.Contains("wifi") ||
-                   hardware.Contains("wireless") ||
-                   hardware.Contains("nic") ||
-                   hardware.Contains("realtek") ||
-                   hardware.Contains("intel i");
-        }
-
-        private bool IsMotherboard(string hardware)
-        {
-            return hardware.Contains("motherboard") ||
-                   hardware.Contains("mainboard") ||
-                   hardware.Contains("nuvoton") ||
-                   hardware.Contains("ite") ||
-                   hardware.Contains("superio") ||
-                   hardware.Contains("fintek");
-        }
+        private bool IsCpu(string hw) => hw.Contains("cpu") || hw.Contains("ryzen") || hw.Contains("intel") || hw.Contains("core i") || hw.Contains("processor");
+        private bool IsGpu(string hw) => hw.Contains("gpu") || hw.Contains("nvidia") || hw.Contains("radeon") || hw.Contains("geforce") || hw.Contains("rtx") || hw.Contains("gtx") || hw.Contains("amd radeon");
+        private bool IsMemory(string hw) => hw.Contains("memory") || hw.Contains("ram");
+        private bool IsStorage(string hw) => hw.Contains("ssd") || hw.Contains("hdd") || hw.Contains("nvme") || hw.Contains("disk") || hw.Contains("drive");
+        private bool IsNetwork(string hw) => hw.Contains("network") || hw.Contains("ethernet") || hw.Contains("wifi") || hw.Contains("wireless");
+        private bool IsMotherboard(string hw) => hw.Contains("motherboard") || hw.Contains("mainboard") || hw.Contains("nuvoton") || hw.Contains("ite");
     }
 }
