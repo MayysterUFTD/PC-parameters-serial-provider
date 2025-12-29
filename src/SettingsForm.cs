@@ -7,6 +7,7 @@ using System.Windows.Forms;
 using System.Collections.Generic;
 using HardwareMonitorTray.Protocol;
 
+
 namespace HardwareMonitorTray
 {
     public class SettingsForm : Form
@@ -40,7 +41,8 @@ namespace HardwareMonitorTray
 
         private Dictionary<string, byte> _sensorIdMap = new Dictionary<string, byte>();
         private byte _nextCustomId = 0x80;
-
+        private Button _savePacketBtn, _copyPacketBtn;
+        private TextBox _packetHexBox;
         public SettingsForm(ConfigManager cfg, HardwareMonitorService mon,
             Action<bool> onToggleMonitoring, Func<bool> isMonitoringRunning)
         {
@@ -305,7 +307,46 @@ namespace HardwareMonitorTray
 
             FormClosing += OnFormClosing;
         }
+        private Panel BuildButtonsPanel()
+        {
+            var panel = new Panel { Dock = DockStyle.Fill };
+            var flow = new FlowLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                FlowDirection = FlowDirection.RightToLeft,
+                Padding = new Padding(0, 12, 0, 0)
+            };
 
+            var exitBtn = new Button
+            {
+                Text = "🚪 Exit",
+                Width = 110,
+                Height = 38,
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(149, 165, 166),
+                ForeColor = Color.White,
+                Margin = new Padding(10, 0, 0, 0)
+            };
+            exitBtn.FlatAppearance.BorderSize = 0;
+            exitBtn.Click += (s, e) => { if (ConfirmExit()) Close(); };
+            flow.Controls.Add(exitBtn);
+
+            _saveBtn = new Button
+            {
+                Text = "💾 Save",
+                Width = 110,
+                Height = 38,
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(52, 152, 219),
+                ForeColor = Color.White
+            };
+            _saveBtn.FlatAppearance.BorderSize = 0;
+            _saveBtn.Click += Save;
+            flow.Controls.Add(_saveBtn);
+
+            panel.Controls.Add(flow);
+            return panel;
+        }
         private GroupBox BuildStatusGroup()
         {
             var grp = new GroupBox
@@ -626,32 +667,85 @@ namespace HardwareMonitorTray
             panel.Controls.Add(_sizeLbl);
             y += 40;
 
-            _sizeBar = new ProgressBar { Width = 300, Height = 16, Maximum = 500, Location = new Point(0, y) };
+            _sizeBar = new ProgressBar { Width = 300, Height = 16, Maximum = 1500, Location = new Point(0, y) };
             panel.Controls.Add(_sizeBar);
             y += 26;
 
             _bwLbl = new Label { Text = "0 B/s", Font = new Font("Segoe UI", 12, FontStyle.Bold), ForeColor = Color.FromArgb(155, 89, 182), AutoSize = true, Location = new Point(0, y) };
             panel.Controls.Add(_bwLbl);
-            y += 45;
+            y += 35;
 
-            // Help button
+            // Buttons row
+            var btnFlow = new FlowLayoutPanel { Location = new Point(0, y), Width = 320, Height = 35, FlowDirection = FlowDirection.LeftToRight };
+
             _helpBtn = new Button
             {
-                Text = "❓ Protocol Help",
-                Width = 140,
+                Text = "❓ Protocol",
+                Width = 95,
                 Height = 30,
-                Location = new Point(0, y),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(241, 196, 15),
-                ForeColor = Color.Black
+                ForeColor = Color.Black,
+                Margin = new Padding(0, 0, 5, 0)
             };
             _helpBtn.FlatAppearance.BorderSize = 0;
             _helpBtn.Click += ShowProtocolHelp;
-            panel.Controls.Add(_helpBtn);
-            y += 45;
+            btnFlow.Controls.Add(_helpBtn);
 
+            _savePacketBtn = new Button
+            {
+                Text = "💾 Save . bin",
+                Width = 95,
+                Height = 30,
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(52, 152, 219),
+                ForeColor = Color.White,
+                Margin = new Padding(0, 0, 5, 0)
+            };
+            _savePacketBtn.FlatAppearance.BorderSize = 0;
+            _savePacketBtn.Click += SaveExamplePacket;
+            btnFlow.Controls.Add(_savePacketBtn);
+
+            _copyPacketBtn = new Button
+            {
+                Text = "📋 Copy",
+                Width = 75,
+                Height = 30,
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(155, 89, 182),
+                ForeColor = Color.White,
+                Margin = new Padding(0, 0, 0, 0)
+            };
+            _copyPacketBtn.FlatAppearance.BorderSize = 0;
+            _copyPacketBtn.Click += CopyPacketToClipboard;
+            btnFlow.Controls.Add(_copyPacketBtn);
+
+            panel.Controls.Add(btnFlow);
+            y += 40;
+
+            // Packet HEX display
+            panel.Controls.Add(new Label { Text = "Example Packet (HEX):", Font = new Font(Font, FontStyle.Bold), AutoSize = true, Location = new Point(0, y) });
+            y += 20;
+
+            _packetHexBox = new TextBox
+            {
+                Multiline = true,
+                ReadOnly = true,
+                ScrollBars = ScrollBars.Vertical,
+                WordWrap = true,
+                Font = new Font("Consolas", 8.5f),
+                BackColor = Color.FromArgb(30, 30, 35),
+                ForeColor = Color.FromArgb(0, 255, 128),
+                BorderStyle = BorderStyle.FixedSingle,
+                Location = new Point(0, y),
+                Size = new Size(310, 60)
+            };
+            panel.Controls.Add(_packetHexBox);
+            y += 70;
+
+            // Live Preview
             panel.Controls.Add(new Label { Text = "Live Preview:", Font = new Font(Font, FontStyle.Bold), AutoSize = true, Location = new Point(0, y) });
-            y += 24;
+            y += 20;
 
             _previewBox = new TextBox
             {
@@ -659,62 +753,27 @@ namespace HardwareMonitorTray
                 ReadOnly = true,
                 ScrollBars = ScrollBars.Both,
                 WordWrap = false,
-                Font = new Font("Consolas", 9.5f),
+                Font = new Font("Consolas", 9f),
                 BackColor = Color.FromArgb(20, 20, 25),
                 ForeColor = Color.FromArgb(46, 204, 113),
                 BorderStyle = BorderStyle.FixedSingle,
                 Location = new Point(0, y),
-                Size = new Size(310, 220)
+                Size = new Size(310, 140)
             };
             panel.Controls.Add(_previewBox);
 
             panel.Resize += (s, e) =>
             {
-                _previewBox.Width = Math.Max(200, panel.Width - 30);
-                _previewBox.Height = Math.Max(150, panel.Height - y - 20);
-                _sizeBar.Width = Math.Max(200, panel.Width - 30);
+                int w = Math.Max(200, panel.Width - 30);
+                _sizeBar.Width = w;
+                _packetHexBox.Width = w;
+                _previewBox.Width = w;
+                _previewBox.Height = Math.Max(100, panel.Height - y - 20);
             };
 
             grp.Controls.Add(panel);
             parent.Controls.Add(grp);
         }
-
-        private Panel BuildButtonsPanel()
-        {
-            var panel = new Panel { Dock = DockStyle.Fill };
-            var flow = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(0, 12, 0, 0) };
-
-            var exitBtn = new Button
-            {
-                Text = "🚪 Exit",
-                Width = 110,
-                Height = 38,
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(149, 165, 166),
-                ForeColor = Color.White,
-                Margin = new Padding(10, 0, 0, 0)
-            };
-            exitBtn.FlatAppearance.BorderSize = 0;
-            exitBtn.Click += (s, e) => { if (ConfirmExit()) Close(); };
-            flow.Controls.Add(exitBtn);
-
-            _saveBtn = new Button
-            {
-                Text = "💾 Save",
-                Width = 110,
-                Height = 38,
-                FlatStyle = FlatStyle.Flat,
-                BackColor = Color.FromArgb(52, 152, 219),
-                ForeColor = Color.White
-            };
-            _saveBtn.FlatAppearance.BorderSize = 0;
-            _saveBtn.Click += Save;
-            flow.Controls.Add(_saveBtn);
-
-            panel.Controls.Add(flow);
-            return panel;
-        }
-
         private void ShowProtocolHelp(object s, EventArgs e)
         {
             var helpForm = new Form
@@ -1074,11 +1133,12 @@ void app_main() {
                 ProtocolMode.Text => Color.FromArgb(241, 196, 15),
                 _ => Color.FromArgb(231, 76, 60)
             };
-            _sizeBar.Value = Math.Min(size, 500);
+            _sizeBar.Value = Math.Min(size, _sizeBar.Maximum);
 
             var pps = 1000.0 / Math.Max(1, (double)_intervalNum.Value);
-            _bwLbl.Text = $"{size * pps:0} B/s ({pps:0.0} packets/s)";
+            _bwLbl.Text = $"{size * pps:0} B/s ({pps:0.0} pkt/s)";
 
+            UpdatePacketHexDisplay();  // <-- DODAJ TO
             UpdatePreview();
         }
 
@@ -1881,5 +1941,369 @@ void app_main() {
         }
 
         #endregion
+
+        /// <summary>
+        /// Buduje przykładową paczkę binarną z aktualnie wybranych sensorów
+        /// </summary>
+        private byte[] BuildExamplePacket()
+        {
+            var selected = _list.CheckedItems.Cast<ListViewItem>()
+                .Select(i => i.Tag as SensorInfo)
+                .Where(x => x != null)
+                .Take(250)
+                .ToList();
+
+            if (selected.Count == 0)
+                return Array.Empty<byte>();
+
+            int count = selected.Count;
+            int packetSize = 3 + (count * 5) + 3; // START + VER + COUNT + DATA + CRC + END
+            byte[] packet = new byte[packetSize];
+
+            int idx = 0;
+
+            // Header
+            packet[idx++] = 0xAA;  // START
+            packet[idx++] = 0x01;  // VERSION
+            packet[idx++] = (byte)count;  // COUNT
+
+            // Sensor data
+            foreach (var sensor in selected)
+            {
+                byte sensorId = GetSensorId(sensor);
+                float value = sensor.Value ?? 0f;
+
+                packet[idx++] = sensorId;
+
+                // Float to bytes (little-endian)
+                byte[] valueBytes = BitConverter.GetBytes(value);
+                packet[idx++] = valueBytes[0];
+                packet[idx++] = valueBytes[1];
+                packet[idx++] = valueBytes[2];
+                packet[idx++] = valueBytes[3];
+            }
+
+            // CRC16 (Modbus)
+            ushort crc = CalculateCRC16(packet, 1, 2 + count * 5);
+            packet[idx++] = (byte)(crc & 0xFF);
+            packet[idx++] = (byte)(crc >> 8);
+
+            // END
+            packet[idx++] = 0x55;
+
+            return packet;
+        }
+
+        private ushort CalculateCRC16(byte[] data, int offset, int length)
+        {
+            ushort crc = 0xFFFF;
+
+            for (int i = offset; i < offset + length && i < data.Length; i++)
+            {
+                crc ^= data[i];
+                for (int j = 0; j < 8; j++)
+                {
+                    if ((crc & 0x0001) != 0)
+                        crc = (ushort)((crc >> 1) ^ 0xA001);
+                    else
+                        crc = (ushort)(crc >> 1);
+                }
+            }
+
+            return crc;
+        }
+
+        /// <summary>
+        /// Aktualizuje wyświetlanie HEX paczki
+        /// </summary>
+        private void UpdatePacketHexDisplay()
+        {
+            var proto = (ProtocolMode)Math.Max(0, _protoCb.SelectedIndex);
+
+            if (proto == ProtocolMode.Binary)
+            {
+                byte[] packet = BuildExamplePacket();
+                if (packet.Length == 0)
+                {
+                    _packetHexBox.Text = "(select sensors to see packet)";
+                    return;
+                }
+
+                var sb = new StringBuilder();
+                for (int i = 0; i < packet.Length; i++)
+                {
+                    sb.Append(packet[i].ToString("X2"));
+                    sb.Append(" ");
+                    if ((i + 1) % 16 == 0) sb.AppendLine();
+                }
+                _packetHexBox.Text = sb.ToString().Trim();
+            }
+            else if (proto == ProtocolMode.Text)
+            {
+                var selected = _list.CheckedItems.Cast<ListViewItem>()
+                    .Select(i => i.Tag as SensorInfo)
+                    .Where(x => x != null)
+                    .Take(10)
+                    .ToList();
+
+                if (selected.Count == 0)
+                {
+                    _packetHexBox.Text = "(select sensors)";
+                    return;
+                }
+
+                var sb = new StringBuilder();
+                sb.AppendLine("$START");
+                foreach (var s in selected)
+                {
+                    sb.AppendLine($"{GetSensorId(s):X2}:{s.Value ?? 0:F1}");
+                }
+                if (GetTotalSelected() > 10) sb.AppendLine($"... +{GetTotalSelected() - 10} more");
+                sb.AppendLine("$END: XX");
+                _packetHexBox.Text = sb.ToString();
+            }
+            else
+            {
+                // JSON preview
+                var selected = _list.CheckedItems.Cast<ListViewItem>()
+                    .Select(i => i.Tag as SensorInfo)
+                    .Where(x => x != null)
+                    .Take(3)
+                    .ToList();
+
+                var sb = new StringBuilder();
+                sb.AppendLine("{\"sensors\":[");
+                foreach (var s in selected)
+                {
+                    sb.AppendLine($"  {{\"id\": \"0x{GetSensorId(s):X2}\",\"v\":{s.Value ?? 0:F1}}},");
+                }
+                if (GetTotalSelected() > 3) sb.AppendLine($"  ... +{GetTotalSelected() - 3} more");
+                sb.AppendLine("]}");
+                _packetHexBox.Text = sb.ToString();
+            }
+        }
+
+        /// <summary>
+        /// Zapisuje przykładową paczkę do pliku
+        /// </summary>
+        private void SaveExamplePacket(object sender, EventArgs e)
+        {
+            var proto = (ProtocolMode)Math.Max(0, _protoCb.SelectedIndex);
+
+            if (proto == ProtocolMode.Binary)
+            {
+                byte[] packet = BuildExamplePacket();
+                if (packet.Length == 0)
+                {
+                    MessageBox.Show("Select at least one sensor first.", "No Data", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                using var dlg = new SaveFileDialog
+                {
+                    Filter = "Binary file|*.bin|All files|*.*",
+                    FileName = $"hw_packet_{DateTime.Now:yyyyMMdd_HHmmss}.bin",
+                    Title = "Save Example Packet"
+                };
+
+                if (dlg.ShowDialog() == DialogResult.OK)
+                {
+                    File.WriteAllBytes(dlg.FileName, packet);
+
+                    // Zapisz też plik . txt z opisem
+                    var txtFile = Path.ChangeExtension(dlg.FileName, ".txt");
+                    var sb = new StringBuilder();
+                    sb.AppendLine("Hardware Monitor - Example Packet");
+                    sb.AppendLine($"Generated: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+                    sb.AppendLine($"Sensors: {_list.CheckedItems.Count}");
+                    sb.AppendLine($"Size: {packet.Length} bytes");
+                    sb.AppendLine();
+                    sb.AppendLine("=== PACKET STRUCTURE ===");
+                    sb.AppendLine($"START:    0x{packet[0]:X2}");
+                    sb.AppendLine($"VERSION: 0x{packet[1]: X2}");
+                    sb.AppendLine($"COUNT:   {packet[2]} (0x{packet[2]:X2})");
+                    sb.AppendLine();
+                    sb.AppendLine("=== SENSOR DATA ===");
+
+                    int offset = 3;
+                    int count = packet[2];
+                    for (int i = 0; i < count && offset + 5 <= packet.Length - 3; i++)
+                    {
+                        byte id = packet[offset];
+                        float value = BitConverter.ToSingle(packet, offset + 1);
+                        var sensor = _list.CheckedItems.Cast<ListViewItem>()
+                            .Select(x => x.Tag as SensorInfo)
+                            .FirstOrDefault(s => s != null && GetSensorId(s) == id);
+
+                        sb.AppendLine($"[{i:D3}] ID=0x{id: X2} Value={value:F2} ({sensor?.Name ?? "Unknown"})");
+                        offset += 5;
+                    }
+
+                    sb.AppendLine();
+                    sb.AppendLine($"CRC16:   0x{packet[packet.Length - 3]:X2}{packet[packet.Length - 2]:X2}");
+                    sb.AppendLine($"END:     0x{packet[packet.Length - 1]:X2}");
+                    sb.AppendLine();
+                    sb.AppendLine("=== RAW HEX ===");
+                    for (int i = 0; i < packet.Length; i++)
+                    {
+                        sb.Append(packet[i].ToString("X2") + " ");
+                        if ((i + 1) % 16 == 0) sb.AppendLine();
+                    }
+
+                    File.WriteAllText(txtFile, sb.ToString());
+
+                    MessageBox.Show(
+                        $"Saved:\n\n" +
+                        $"• {Path.GetFileName(dlg.FileName)} ({packet.Length} bytes)\n" +
+                        $"• {Path.GetFileName(txtFile)} (description)\n\n" +
+                        $"Location: {Path.GetDirectoryName(dlg.FileName)}",
+                        "Packet Saved",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
+                }
+            }
+            else
+            {
+                // Text/JSON - zapisz jako . txt
+                using var dlg = new SaveFileDialog
+                {
+                    Filter = proto == ProtocolMode.Text ? "Text file|*.txt" : "JSON file|*.json",
+                    FileName = $"hw_packet_{DateTime.Now:yyyyMMdd_HHmmss}.{(proto == ProtocolMode.Text ? "txt" : "json")}",
+                    Title = "Save Example Packet"
+                };
+
+                if (dlg.ShowDialog() == DialogResult.OK)
+                {
+                    string content = BuildTextOrJsonPacket(proto);
+                    File.WriteAllText(dlg.FileName, content);
+
+                    MessageBox.Show(
+                        $"Saved:  {Path.GetFileName(dlg.FileName)}",
+                        "Packet Saved",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Information);
+                }
+            }
+        }
+
+        private string BuildTextOrJsonPacket(ProtocolMode mode)
+        {
+            var selected = _list.CheckedItems.Cast<ListViewItem>()
+                .Select(i => i.Tag as SensorInfo)
+                .Where(x => x != null)
+                .Take(250)
+                .ToList();
+
+            if (mode == ProtocolMode.Text)
+            {
+                var sb = new StringBuilder();
+                sb.AppendLine("$START");
+                foreach (var s in selected)
+                {
+                    sb.AppendLine($"{GetSensorId(s):X2}:{s.Value ?? 0:F1}");
+                }
+                sb.AppendLine("$END:XX");
+                return sb.ToString();
+            }
+            else
+            {
+                // JSON
+                var sb = new StringBuilder();
+                sb.AppendLine("{");
+                sb.AppendLine($"  \"timestamp\": \"{DateTime.UtcNow: o}\",");
+                sb.AppendLine("  \"sensors\":  [");
+
+                for (int i = 0; i < selected.Count; i++)
+                {
+                    var s = selected[i];
+                    var comma = i < selected.Count - 1 ? "," : "";
+                    sb.AppendLine($"    {{\"id\": \"0x{GetSensorId(s):X2}\", \"name\": \"{s.Name}\", \"value\": {s.Value ?? 0:F1}, \"unit\": \"{s.Unit}\"}}{comma}");
+                }
+
+                sb.AppendLine("  ]");
+                sb.AppendLine("}");
+                return sb.ToString();
+            }
+        }
+
+        /// <summary>
+        /// Kopiuje paczkę do schowka
+        /// </summary>
+        private void CopyPacketToClipboard(object sender, EventArgs e)
+        {
+            var proto = (ProtocolMode)Math.Max(0, _protoCb.SelectedIndex);
+
+            string clipboardText;
+
+            if (proto == ProtocolMode.Binary)
+            {
+                byte[] packet = BuildExamplePacket();
+                if (packet.Length == 0)
+                {
+                    MessageBox.Show("Select at least one sensor first.", "No Data", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                // Format jako C array
+                var sb = new StringBuilder();
+                sb.AppendLine("// Hardware Monitor Example Packet");
+                sb.AppendLine($"// Generated: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+                sb.AppendLine($"// Sensors:  {_list.CheckedItems.Count}, Size: {packet.Length} bytes");
+                sb.AppendLine();
+                sb.AppendLine($"const uint8_t hw_example_packet[{packet.Length}] = {{");
+
+                for (int i = 0; i < packet.Length; i++)
+                {
+                    if (i % 16 == 0) sb.Append("    ");
+                    sb.Append($"0x{packet[i]: X2}");
+                    if (i < packet.Length - 1) sb.Append(", ");
+                    if ((i + 1) % 16 == 0 || i == packet.Length - 1) sb.AppendLine();
+                }
+
+                sb.AppendLine("};");
+                sb.AppendLine();
+                sb.AppendLine("// HEX string:");
+                sb.Append("// ");
+                for (int i = 0; i < Math.Min(packet.Length, 32); i++)
+                {
+                    sb.Append(packet[i].ToString("X2") + " ");
+                }
+                if (packet.Length > 32) sb.Append($"... (+{packet.Length - 32} bytes)");
+
+                clipboardText = sb.ToString();
+            }
+            else
+            {
+                clipboardText = BuildTextOrJsonPacket(proto);
+            }
+
+            try
+            {
+                Clipboard.SetText(clipboardText);
+
+                // Animacja przycisku
+                var originalText = _copyPacketBtn.Text;
+                var originalColor = _copyPacketBtn.BackColor;
+                _copyPacketBtn.Text = "✓ Copied!";
+                _copyPacketBtn.BackColor = Color.FromArgb(46, 204, 113);
+
+                var timer = new System.Windows.Forms.Timer { Interval = 1500 };
+                timer.Tick += (s, ev) =>
+                {
+                    timer.Stop();
+                    timer.Dispose();
+                    if (!_closing)
+                    {
+                        _copyPacketBtn.Text = originalText;
+                        _copyPacketBtn.BackColor = originalColor;
+                    }
+                };
+                timer.Start();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Failed to copy:  {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
     }
 }
