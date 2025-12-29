@@ -25,7 +25,7 @@ namespace HardwareMonitorTray
         private readonly object _lockObj = new object();
 
         private ComboBox _portCb, _baudCb, _protoCb, _iconCb, _typeCb, _hwCb;
-        private NumericUpDown _intervalNum;
+        private NumericUpDown _intervalNum, _refreshNum;
         private CheckBox _autoChk, _winChk;
         private ListView _list;
         private TextBox _searchBox, _previewBox;
@@ -360,37 +360,41 @@ namespace HardwareMonitorTray
 
             var flow = new FlowLayoutPanel { Dock = DockStyle.Fill };
 
+            // Port
             flow.Controls.Add(new Label { Text = "Port:", AutoSize = true, Margin = new Padding(0, 10, 8, 0) });
-            _portCb = new ComboBox { Width = 100, DropDownStyle = ComboBoxStyle.DropDownList, Margin = new Padding(0, 6, 8, 0) };
+            _portCb = new ComboBox { Width = 90, DropDownStyle = ComboBoxStyle.DropDownList, Margin = new Padding(0, 6, 8, 0) };
             _portCb.SelectedIndexChanged += OnSettingChanged;
             flow.Controls.Add(_portCb);
 
-            var refreshBtn = new Button
-            {
-                Text = "🔄",
-                Width = 38,
-                Height = 28,
-                FlatStyle = FlatStyle.Flat,
-                Margin = new Padding(0, 6, 25, 0)
-            };
+            var refreshBtn = new Button { Text = "🔄", Width = 35, Height = 28, FlatStyle = FlatStyle.Flat, Margin = new Padding(0, 6, 20, 0) };
             refreshBtn.FlatAppearance.BorderSize = 0;
             refreshBtn.Click += (s, e) => RefreshPorts();
             flow.Controls.Add(refreshBtn);
 
+            // Baud
             flow.Controls.Add(new Label { Text = "Baud:", AutoSize = true, Margin = new Padding(0, 10, 8, 0) });
-            _baudCb = new ComboBox { Width = 110, DropDownStyle = ComboBoxStyle.DropDownList, Margin = new Padding(0, 6, 25, 0) };
+            _baudCb = new ComboBox { Width = 100, DropDownStyle = ComboBoxStyle.DropDownList, Margin = new Padding(0, 6, 20, 0) };
             _baudCb.Items.AddRange(new object[] { 9600, 57600, 115200, 230400, 460800, 921600 });
             _baudCb.SelectedIndexChanged += OnSettingChanged;
             flow.Controls.Add(_baudCb);
 
-            flow.Controls.Add(new Label { Text = "Interval:", AutoSize = true, Margin = new Padding(0, 10, 8, 0) });
-            _intervalNum = new NumericUpDown { Width = 90, Minimum = 50, Maximum = 60000, Increment = 50, Margin = new Padding(0, 6, 5, 0) };
+            // Send Interval
+            flow.Controls.Add(new Label { Text = "Send:", AutoSize = true, Margin = new Padding(0, 10, 5, 0) });
+            _intervalNum = new NumericUpDown { Width = 70, Minimum = 50, Maximum = 5000, Increment = 50, Margin = new Padding(0, 6, 3, 0) };
             _intervalNum.ValueChanged += OnSettingChanged;
             flow.Controls.Add(_intervalNum);
+            flow.Controls.Add(new Label { Text = "ms", AutoSize = true, Margin = new Padding(0, 10, 15, 0) });
+
+            // Refresh Interval (NOWE!)
+            flow.Controls.Add(new Label { Text = "Refresh:", AutoSize = true, Margin = new Padding(0, 10, 5, 0) });
+            _refreshNum = new NumericUpDown { Width = 70, Minimum = 50, Maximum = 2000, Increment = 50, Margin = new Padding(0, 6, 3, 0) };
+            _refreshNum.ValueChanged += OnSettingChanged;
+            flow.Controls.Add(_refreshNum);
             flow.Controls.Add(new Label { Text = "ms", AutoSize = true, Margin = new Padding(0, 10, 0, 0) });
 
             grp.Controls.Add(flow);
             return grp;
+
         }
 
         private GroupBox BuildAppearanceGroup()
@@ -899,7 +903,8 @@ void app_main() {
             if (!string.IsNullOrEmpty(_cfg.Config.ComPort)) _portCb.SelectedItem = _cfg.Config.ComPort;
             _baudCb.SelectedItem = _cfg.Config.BaudRate;
             if (_baudCb.SelectedIndex < 0) _baudCb.SelectedIndex = 2;
-            _intervalNum.Value = Math.Clamp(_cfg.Config.SendIntervalMs, 50, 60000);
+            _intervalNum.Value = Math.Clamp(_cfg.Config.SendIntervalMs, 50, 5000);
+            _refreshNum.Value = Math.Clamp(_cfg.Config.RefreshIntervalMs, 50, 2000);  // NOWE
             _protoCb.SelectedIndex = Math.Max(0, (int)_cfg.Config.ProtocolMode);
             _iconCb.SelectedIndex = Math.Max(0, (int)_cfg.Config.IconStyle);
             _autoChk.Checked = _cfg.Config.AutoStart;
@@ -1207,6 +1212,7 @@ void app_main() {
             _cfg.Config.ComPort = _portCb.SelectedItem?.ToString() ?? "";
             _cfg.Config.BaudRate = (int)(_baudCb.SelectedItem ?? 115200);
             _cfg.Config.SendIntervalMs = (int)_intervalNum.Value;
+            _cfg.Config.RefreshIntervalMs = (int)_refreshNum.Value;  // NOWE
             _cfg.Config.ProtocolMode = (ProtocolMode)Math.Max(0, _protoCb.SelectedIndex);
             _cfg.Config.IconStyle = (IconStyle)Math.Max(0, _iconCb.SelectedIndex);
             _cfg.Config.AutoStart = _autoChk.Checked;
@@ -1216,7 +1222,7 @@ void app_main() {
             var chkIds = _list.CheckedItems.Cast<ListViewItem>().Select(i => (i.Tag as SensorInfo)?.Id).Where(x => x != null).ToList();
             _cfg.Config.SelectedSensors = _cfg.Config.SelectedSensors.Where(id => !visIds.Contains(id)).Concat(chkIds).Distinct().ToList();
             _cfg.SaveConfig();
-
+            _mon.RefreshIntervalMs = _cfg.Config.RefreshIntervalMs;
             _dirty = false;
             UpdateTitle();
 
@@ -1402,7 +1408,7 @@ void app_main() {
 
             foreach (var (sensor, enumName, id) in sensors)
             {
-                sb.AppendLine($"    {enumName} = 0x{id: X2},");
+                sb.AppendLine($"    {enumName} = 0x{id:X2},");
             }
 
             sb.AppendLine("    SENSOR_UNKNOWN = 0xFF");

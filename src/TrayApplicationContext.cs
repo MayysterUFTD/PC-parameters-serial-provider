@@ -27,6 +27,7 @@ namespace HardwareMonitorTray
         {
             _config = new ConfigManager();
             _monitor = new HardwareMonitorService();
+            _monitor.RefreshIntervalMs = _config.Config.RefreshIntervalMs;
             _serial = new SerialPortService { Mode = _config.Config.ProtocolMode };
             _collector = new SensorDataCollector(_monitor);
             _iconMgr = new TrayIconManager();

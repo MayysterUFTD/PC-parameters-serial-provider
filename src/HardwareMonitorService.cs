@@ -1,162 +1,154 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using LibreHardwareMonitor.Hardware;
 
 namespace HardwareMonitorTray
 {
-    public class SensorInfo
-    {
-        public string Id { get; set; }
-        public string Name { get; set; }
-        public string Hardware { get; set; }
-        public string Type { get; set; }
-        public float? Value { get; set; }
-        public string Unit { get; set; }
-    }
-
     public class HardwareMonitorService : IDisposable
     {
-        private Thread _workerThread;
-        private volatile bool _running = true;
-        private List<SensorInfo> _cache = new List<SensorInfo>();
+        private readonly Computer _computer;
+        private readonly Timer _updateTimer;
         private readonly object _lock = new object();
+        private List<SensorInfo> _sensors = new();
+        private int _refreshIntervalMs = 500;  // Domyślnie 500ms
 
         public event Action<List<SensorInfo>> OnDataReady;
-        public bool HasData { get; private set; } = false;
+        public bool HasData => _sensors.Count > 0;
+
+        public int RefreshIntervalMs
+        {
+            get => _refreshIntervalMs;
+            set
+            {
+                _refreshIntervalMs = Math.Clamp(value, 50, 5000);
+                _updateTimer?.Change(0, _refreshIntervalMs);
+                System.Diagnostics.Debug.WriteLine($"[HWMonitor] Refresh interval:  {_refreshIntervalMs}ms");
+            }
+        }
 
         public HardwareMonitorService()
         {
-            _workerThread = new Thread(Worker)
+            _computer = new Computer
             {
-                IsBackground = true,
-                Priority = ThreadPriority.BelowNormal,
-                Name = "HWMonitor"
+                IsCpuEnabled = true,
+                IsGpuEnabled = true,
+                IsMemoryEnabled = true,
+                IsMotherboardEnabled = true,
+                IsStorageEnabled = true,
+                IsNetworkEnabled = true,
+                IsBatteryEnabled = true,
+                IsControllerEnabled = true
             };
-            _workerThread.Start();
+
+            _computer.Open();
+
+            // Timer odświeżający dane
+            _updateTimer = new Timer(UpdateSensors, null, 0, _refreshIntervalMs);
         }
 
-        private void Worker()
+        private void UpdateSensors(object state)
         {
-            Computer computer = null;
             try
             {
-                computer = new Computer
-                {
-                    IsCpuEnabled = true,
-                    IsGpuEnabled = true,
-                    IsMemoryEnabled = true,
-                    IsMotherboardEnabled = true,
-                    IsStorageEnabled = true,
-                    IsNetworkEnabled = true,
-                    IsPsuEnabled = true,
-                    IsBatteryEnabled = true
-                };
-                computer.Open();
-                var visitor = new UpdateVisitor();
+                var sensors = new List<SensorInfo>();
 
-                while (_running)
+                lock (_lock)
                 {
-                    try
+                    foreach (var hardware in _computer.Hardware)
                     {
-                        computer.Accept(visitor);
-                        var list = new List<SensorInfo>();
+                        hardware.Update();
+                        CollectSensors(hardware, sensors);
 
-                        foreach (var hw in computer.Hardware)
-                            Collect(hw, list);
-
-                        lock (_lock)
+                        foreach (var subHardware in hardware.SubHardware)
                         {
-                            _cache = list;
-                            HasData = true;
+                            subHardware.Update();
+                            CollectSensors(subHardware, sensors);
                         }
-
-                        // Fire event (on background thread)
-                        OnDataReady?.Invoke(list);
                     }
-                    catch { }
 
-                    // Sleep in small chunks so we can exit quickly
-                    for (int i = 0; i < 20 && _running; i++)
-                        Thread.Sleep(100);
+                    _sensors = sensors;
                 }
+
+                OnDataReady?.Invoke(sensors);
             }
-            catch { }
-            finally
+            catch (Exception ex)
             {
-                try { computer?.Close(); } catch { }
+                System.Diagnostics.Debug.WriteLine($"[HWMonitor] Update error: {ex.Message}");
             }
         }
 
-        private void Collect(IHardware hw, List<SensorInfo> list)
+        private void CollectSensors(IHardware hardware, List<SensorInfo> sensors)
         {
-            foreach (var s in hw.Sensors)
+            foreach (var sensor in hardware.Sensors)
             {
-                list.Add(new SensorInfo
+                sensors.Add(new SensorInfo
                 {
-                    Id = s.Identifier.ToString(),
-                    Name = s.Name,
-                    Hardware = hw.Name,
-                    Type = s.SensorType.ToString(),
-                    Value = s.Value,
-                    Unit = Unit(s.SensorType)
+                    Id = sensor.Identifier.ToString(),
+                    Name = sensor.Name,
+                    Type = sensor.SensorType.ToString(),
+                    Value = sensor.Value,
+                    Hardware = hardware.Name,
+                    Unit = GetUnit(sensor.SensorType)
                 });
             }
-            foreach (var sub in hw.SubHardware)
-                Collect(sub, list);
+        }
+
+        private string GetUnit(SensorType type)
+        {
+            return type switch
+            {
+                SensorType.Temperature => "°C",
+                SensorType.Load => "%",
+                SensorType.Clock => "MHz",
+                SensorType.Power => "W",
+                SensorType.Voltage => "V",
+                SensorType.Fan => "RPM",
+                SensorType.Flow => "L/h",
+                SensorType.Data => "GB",
+                SensorType.SmallData => "MB",
+                SensorType.Throughput => "MB/s",
+                SensorType.Level => "%",
+                _ => ""
+            };
         }
 
         public List<SensorInfo> GetSensors()
         {
-            lock (_lock) { return new List<SensorInfo>(_cache); }
-        }
-
-        public Dictionary<string, object> GetSelectedData(List<string> ids)
-        {
-            var result = new Dictionary<string, object>();
-            result["timestamp"] = DateTime.UtcNow.ToString("o");
-            var data = new List<object>();
-
             lock (_lock)
             {
-                foreach (var id in ids)
-                {
-                    var s = _cache.Find(x => x.Id == id);
-                    if (s?.Value != null && !float.IsNaN(s.Value.Value))
-                    {
-                        data.Add(new { id = s.Id, name = s.Name, hardware = s.Hardware, type = s.Type, value = Math.Round(s.Value.Value, 2), unit = s.Unit });
-                    }
-                }
+                return new List<SensorInfo>(_sensors);
             }
-            result["sensors"] = data;
-            return result;
         }
 
-        private string Unit(SensorType t) => t switch
+        public Dictionary<string, object> GetSelectedData(List<string> selectedIds)
         {
-            SensorType.Voltage => "V",
-            SensorType.Clock => "MHz",
-            SensorType.Temperature => "°C",
-            SensorType.Load => "%",
-            SensorType.Fan => "RPM",
-            SensorType.Power => "W",
-            SensorType.Data => "GB",
-            SensorType.Throughput => "B/s",
-            _ => ""
-        };
+            lock (_lock)
+            {
+                var result = new Dictionary<string, object>
+                {
+                    ["timestamp"] = DateTime.UtcNow.ToString("o"),
+                    ["sensors"] = _sensors
+                        .Where(s => selectedIds.Contains(s.Id))
+                        .Select(s => new
+                        {
+                            id = s.Id,
+                            name = s.Name,
+                            value = s.Value,
+                            unit = s.Unit,
+                            type = s.Type
+                        })
+                        .ToList()
+                };
+                return result;
+            }
+        }
 
         public void Dispose()
         {
-            _running = false;
-            _workerThread?.Join(1000);
-        }
-
-        private class UpdateVisitor : IVisitor
-        {
-            public void VisitComputer(IComputer c) => c.Traverse(this);
-            public void VisitHardware(IHardware h) { h.Update(); foreach (var s in h.SubHardware) s.Accept(this); }
-            public void VisitSensor(ISensor s) { }
-            public void VisitParameter(IParameter p) { }
+            _updateTimer?.Dispose();
+            _computer?.Close();
         }
     }
 }

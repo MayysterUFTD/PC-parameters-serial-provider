@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("HardwareMonitorTray")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+6e5d86c0fdd9d75e94c0a1f52c2a2087826b7992")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+7edca97832cd5eeb572f3bbd07b5d68d66391e77")]
 [assembly: System.Reflection.AssemblyProductAttribute("HardwareMonitorTray")]
 [assembly: System.Reflection.AssemblyTitleAttribute("HardwareMonitorTray")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

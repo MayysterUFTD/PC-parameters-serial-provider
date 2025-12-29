@@ -10,20 +10,15 @@ namespace HardwareMonitorTray
 {
     public class AppConfig
     {
-        public string ComPort { get; set; } = "COM1";
+        public string ComPort { get; set; } = "";
         public int BaudRate { get; set; } = 115200;
-        public int SendIntervalMs { get; set; } = 1000;
+        public int SendIntervalMs { get; set; } = 500;
+        public int RefreshIntervalMs { get; set; } = 250;  // NOWE - odświeżanie danych z hardware
+        public ProtocolMode ProtocolMode { get; set; } = ProtocolMode.Binary;
+        public IconStyle IconStyle { get; set; } = IconStyle.Modern;
         public bool AutoStart { get; set; } = false;
         public bool StartWithWindows { get; set; } = false;
-        public List<string> SelectedSensors { get; set; } = new List<string>();
-
-        [JsonConverter(typeof(JsonStringEnumConverter))]
-        public ProtocolMode ProtocolMode { get; set; } = ProtocolMode.Binary;
-
-        [JsonConverter(typeof(JsonStringEnumConverter))]
-        public IconStyle IconStyle { get; set; } = IconStyle.Modern;
-
-        public bool FirstRun { get; set; } = true;  // Nowe pole
+        public List<string> SelectedSensors { get; set; } = new();
     }
 
     public class ConfigManager
