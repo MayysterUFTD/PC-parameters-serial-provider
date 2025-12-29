@@ -39,8 +39,6 @@ namespace HardwareMonitorTray
         private System.Windows.Forms.Timer _previewAnimTimer;
         private int _previewAnimFrame = 0;
 
-        private Dictionary<string, byte> _sensorIdMap = new Dictionary<string, byte>();
-        private byte _nextCustomId = 0x80;
         private Button _savePacketBtn, _copyPacketBtn;
         private TextBox _packetHexBox;
         public SettingsForm(ConfigManager cfg, HardwareMonitorService mon,
@@ -116,7 +114,7 @@ namespace HardwareMonitorTray
         {
             if (_init || _closing) return;
 
-            BuildSensorIdMap();
+            //BuildSensorIdMap();
             PopulateFilters();
             FilterList();
             _loadLbl.Visible = false;
@@ -124,31 +122,7 @@ namespace HardwareMonitorTray
             _init = true;
         }
 
-        private void BuildSensorIdMap()
-        {
-            _sensorIdMap.Clear();
-            _nextCustomId = 0x80;
-            var counters = new Dictionary<string, int>();
 
-            List<SensorInfo> sensors;
-            lock (_lockObj) { sensors = new List<SensorInfo>(_sensors); }
-
-            foreach (var sensor in sensors)
-            {
-                var baseId = GetBaseIdForSensor(sensor);
-                if (baseId != 0xFF)
-                {
-                    var key = $"{GetCategory(sensor)}_{sensor.Type}_{baseId:X2}";
-                    if (!counters.ContainsKey(key)) counters[key] = 0;
-                    var offset = counters[key]++;
-                    _sensorIdMap[sensor.Id] = offset == 0 ? baseId : _nextCustomId++;
-                }
-                else
-                {
-                    _sensorIdMap[sensor.Id] = _nextCustomId++;
-                }
-            }
-        }
 
         private string GetCategory(SensorInfo s)
         {
@@ -159,54 +133,11 @@ namespace HardwareMonitorTray
             if (hw.Contains("ssd") || hw.Contains("nvme") || hw.Contains("hdd")) return "DISK";
             return "SYS";
         }
-
-        private byte GetBaseIdForSensor(SensorInfo s)
+        private byte GetSensorId(SensorInfo s)
         {
-            var hw = s.Hardware.ToLower();
-            var nm = s.Name.ToLower();
-            var tp = s.Type.ToLower();
-
-            if (hw.Contains("cpu") || hw.Contains("ryzen") || hw.Contains("intel"))
-            {
-                if (tp == "temperature")
-                {
-                    if (nm.Contains("package") || nm.Contains("tctl") || nm.Contains("tdie")) return 0x01;
-                    if (nm.Contains("ccd")) return 0x08;
-                    return 0x05;
-                }
-                if (tp == "load") return nm.Contains("total") ? (byte)0x02 : (byte)0x06;
-                if (tp == "clock") return 0x03;
-                if (tp == "power") return nm.Contains("package") ? (byte)0x04 : (byte)0x07;
-            }
-
-            if (hw.Contains("gpu") || hw.Contains("nvidia") || hw.Contains("radeon"))
-            {
-                if (tp == "temperature")
-                {
-                    if (nm.Contains("hot")) return 0x18;
-                    if (nm.Contains("mem")) return 0x17;
-                    return 0x10;
-                }
-                if (tp == "load") return nm.Contains("mem") ? (byte)0x15 : (byte)0x11;
-                if (tp == "clock") return nm.Contains("mem") ? (byte)0x13 : (byte)0x12;
-                if (tp == "power") return 0x14;
-                if (tp == "fan") return 0x16;
-            }
-
-            if (hw.Contains("memory"))
-            {
-                if (tp == "load") return 0x22;
-                if (tp == "data") return 0x20;
-            }
-
-            if (hw.Contains("ssd") || hw.Contains("nvme")) return tp == "temperature" ? (byte)0x30 : (byte)0x31;
-
-            return 0xFF;
+            if (s == null) return 0xFF;
+            return SensorIdMapper.Instance.GetOrAssignId(s.Id, s);
         }
-
-        private byte GetSensorId(SensorInfo s) =>
-            _sensorIdMap.TryGetValue(s.Id, out var id) ? id : (byte)0xFF;
-
         /// <summary>
         /// Generuje unikalną, czytelną nazwę dla sensora (do . h/. c)
         /// </summary>
@@ -1013,79 +944,6 @@ void app_main() {
             _hwCb.SelectedIndex = 0;
         }
 
-        private void FilterList()
-        {
-            if (_closing) return;
-
-            _list.ItemChecked -= OnItemChecked;
-            _list.BeginUpdate();
-            _list.Items.Clear();
-
-            List<SensorInfo> sensors;
-            lock (_lockObj) { sensors = new List<SensorInfo>(_sensors); }
-
-            var q = sensors.AsEnumerable();
-            var search = _searchBox.Text?.ToLower() ?? "";
-
-            if (!string.IsNullOrEmpty(search))
-                q = q.Where(x => x.Name.ToLower().Contains(search) || x.Hardware.ToLower().Contains(search));
-
-            if (_typeCb.SelectedIndex > 0)
-                q = q.Where(x => x.Type == _typeCb.SelectedItem.ToString());
-
-            if (_hwCb.SelectedIndex > 0)
-                q = q.Where(x => x.Hardware == _hwCb.SelectedItem.ToString());
-
-            foreach (var s in q.Take(250))
-            {
-                var it = new ListViewItem { Checked = _cfg.Config.SelectedSensors.Contains(s.Id) };
-                it.SubItems.Add(s.Hardware);
-                it.SubItems.Add(s.Name);
-                it.SubItems.Add(s.Type);
-                it.SubItems.Add(FormatValue(s.Value, s.Unit));
-                it.SubItems.Add($"0x{GetSensorId(s):X2}");
-                it.Tag = s;
-                it.ForeColor = GetTypeColor(s.Type);
-                _list.Items.Add(it);
-            }
-
-            _list.EndUpdate();
-            _list.ItemChecked += OnItemChecked;
-            UpdateInfo();
-        }
-
-        private void RefreshValuesAsync()
-        {
-            if (_refreshing || _closing || !_init) return;
-            _refreshing = true;
-
-            try
-            {
-                List<SensorInfo> fresh;
-                lock (_lockObj) { fresh = new List<SensorInfo>(_sensors); }
-
-                if (fresh.Count == 0) return;
-
-                _list.BeginUpdate();
-                foreach (ListViewItem it in _list.Items)
-                {
-                    var s = it.Tag as SensorInfo;
-                    if (s == null) continue;
-                    var upd = fresh.Find(x => x.Id == s.Id);
-                    if (upd != null)
-                    {
-                        it.SubItems[4].Text = FormatValue(upd.Value, upd.Unit);
-                        it.Tag = upd;
-                    }
-                }
-                _list.EndUpdate();
-            }
-            finally
-            {
-                _refreshing = false;
-            }
-        }
-
         private void OnItemChecked(object s, ItemCheckedEventArgs e)
         {
             if (_init && !_refreshing)
@@ -1317,7 +1175,88 @@ void app_main() {
         }
 
         #region Sensor Map & Export
+        private void FilterList()
+        {
+            if (_closing) return;
 
+            _list.ItemChecked -= OnItemChecked;
+            _list.BeginUpdate();
+            _list.Items.Clear();
+
+            List<SensorInfo> sensors;
+            lock (_lockObj) { sensors = new List<SensorInfo>(_sensors); }
+
+            var q = sensors.AsEnumerable();
+            var search = _searchBox.Text?.ToLower() ?? "";
+
+            if (!string.IsNullOrEmpty(search))
+                q = q.Where(x => x.Name.ToLower().Contains(search) || x.Hardware.ToLower().Contains(search));
+
+            if (_typeCb.SelectedIndex > 0)
+                q = q.Where(x => x.Type == _typeCb.SelectedItem.ToString());
+
+            if (_hwCb.SelectedIndex > 0)
+                q = q.Where(x => x.Hardware == _hwCb.SelectedItem.ToString());
+
+            var mapper = SensorIdMapper.Instance;
+
+            foreach (var s in q.Take(250))
+            {
+                // Pobierz ID z centralnej mapy
+                byte sensorId = mapper.GetOrAssignId(s.Id, s);
+
+                var it = new ListViewItem { Checked = _cfg.Config.SelectedSensors.Contains(s.Id) };
+                it.SubItems.Add(s.Hardware);
+                it.SubItems.Add(s.Name);
+                it.SubItems.Add(s.Type);
+                it.SubItems.Add(FormatValue(s.Value, s.Unit));
+                it.SubItems.Add($"0x{sensorId:X2}");  // Poprawne ID z mapy
+                it.Tag = s;
+                it.ForeColor = GetTypeColor(s.Type);
+                _list.Items.Add(it);
+            }
+
+            _list.EndUpdate();
+            _list.ItemChecked += OnItemChecked;
+            UpdateInfo();
+        }
+        private void RefreshValuesAsync()
+        {
+            if (_refreshing || _closing || !_init) return;
+            _refreshing = true;
+
+            try
+            {
+                List<SensorInfo> fresh;
+                lock (_lockObj) { fresh = new List<SensorInfo>(_sensors); }
+
+                if (fresh.Count == 0) return;
+
+                var mapper = SensorIdMapper.Instance;
+
+                _list.BeginUpdate();
+                foreach (ListViewItem it in _list.Items)
+                {
+                    var s = it.Tag as SensorInfo;
+                    if (s == null) continue;
+
+                    var upd = fresh.Find(x => x.Id == s.Id);
+                    if (upd != null)
+                    {
+                        it.SubItems[4].Text = FormatValue(upd.Value, upd.Unit);
+                        // Aktualizuj też ID (na wypadek gdyby się zmieniło)
+                        byte sensorId = mapper.GetOrAssignId(upd.Id, upd);
+                        it.SubItems[5].Text = $"0x{sensorId:X2}";
+                        it.Tag = upd;
+                    }
+                }
+                _list.EndUpdate();
+            }
+            finally
+            {
+                _refreshing = false;
+            }
+        }
         private void ExportSensorStruct(object sender, EventArgs e)
         {
             var selectedIds = _list.CheckedItems.Cast<ListViewItem>()
