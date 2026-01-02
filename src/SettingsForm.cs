@@ -256,7 +256,7 @@ namespace HardwareMonitorTray
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.FromArgb(149, 165, 166),
                 ForeColor = Color.White,
-                Margin = new Padding(10, 0, 0, 0)
+                //Margin = new Padding(10, 0, 0, 0)
             };
             exitBtn.FlatAppearance.BorderSize = 0;
             exitBtn.Click += (s, e) => { if (ConfirmExit()) Close(); };
@@ -284,8 +284,8 @@ namespace HardwareMonitorTray
             {
                 Text = "📊 Status",
                 Dock = DockStyle.Fill,
-                Margin = new Padding(0, 0, 0, 8),
-                Padding = new Padding(15, 8, 15, 8)
+                Margin = new Padding(0, 0, 0, 5),
+                //Padding = new Padding(15, 8, 15, 8)
             };
 
             var flow = new FlowLayoutPanel { Dock = DockStyle.Fill };
@@ -327,7 +327,7 @@ namespace HardwareMonitorTray
                 Text = "📡 Connection",
                 Dock = DockStyle.Fill,
                 Margin = new Padding(0, 0, 0, 8),
-                Padding = new Padding(15, 8, 15, 8)
+                //Padding = new Padding(15, 8, 15, 8)
             };
 
             var flow = new FlowLayoutPanel { Dock = DockStyle.Fill };
@@ -417,8 +417,8 @@ namespace HardwareMonitorTray
             {
                 Text = "🚀 Startup",
                 Dock = DockStyle.Fill,
-                Margin = new Padding(0, 0, 0, 8),
-                Padding = new Padding(15, 8, 15, 8)
+                Margin = new Padding(0, 0, 0, 5),
+                // Padding = new Padding(15, 8, 15, 8)
             };
 
             var flow = new FlowLayoutPanel { Dock = DockStyle.Fill };
