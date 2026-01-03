@@ -10,7 +10,7 @@ namespace HardwareMonitorTray.Protocol
     /// </summary>
     public enum ProtocolMode
     {
-        Binary,     // Most efficient - 5 bytes per sensor
+        Binary,     // Most efficient - 6 bytes per sensor (ID 2 bytes + VALUE 4 bytes)
         Text,       // Human readable - for debugging
         Json        // Legacy - full JSON format
     }
@@ -31,6 +31,11 @@ namespace HardwareMonitorTray.Protocol
             if (float.IsNaN(Value) || float.IsInfinity(Value))
                 return false;
 
+            // Sprawdź czy ID nie jest zarezerwowane
+            ushort idValue = (ushort)Id;
+            if (IsReservedId(idValue))
+                return false;
+
             return Id switch
             {
                 // Temperature sensors:  -40°C to 150°C
@@ -43,7 +48,7 @@ namespace HardwareMonitorTray.Protocol
                 SensorId.RamLoad or SensorId.DiskLoad
                     => Value >= 0 && Value <= 100,
 
-                // Clock sensors: 0 to 10000 MHz
+                // Clock sensors:  0 to 10000 MHz
                 SensorId.CpuClock or SensorId.GpuClock or SensorId.GpuMemoryClock
                     => Value >= 0 && Value <= 10000,
 
@@ -68,28 +73,45 @@ namespace HardwareMonitorTray.Protocol
                 SensorId.DiskRead or SensorId.DiskWrite
                     => Value >= 0,
 
-                _ => false
+                _ => true  // Custom sensors - accept any value
             };
+        }
+
+        /// <summary>
+        /// Sprawdza czy ID jest zarezerwowane (bajty kontrolne protokołu)
+        /// </summary>
+        public static bool IsReservedId(ushort id)
+        {
+            byte highByte = (byte)(id >> 8);
+            byte lowByte = (byte)(id & 0xFF);
+
+            // ID nie może zawierać bajtów START (0xAA) ani END (0x55)
+            return highByte == SerialProtocol.START_BYTE ||
+                   highByte == SerialProtocol.END_BYTE ||
+                   lowByte == SerialProtocol.START_BYTE ||
+                   lowByte == SerialProtocol.END_BYTE;
         }
     }
 
     /// <summary>
     /// Serial protocol for hardware monitor data transmission
+    /// Protocol v2:  2-byte sensor IDs
     /// </summary>
     public static class SerialProtocol
     {
         public const byte START_BYTE = 0xAA;
         public const byte END_BYTE = 0x55;
-        public const byte PROTOCOL_VERSION = 0x01;
+        public const byte PROTOCOL_VERSION = 0x02;  // Wersja 2 - 2-bajtowe ID
 
-        public const int MAX_SENSORS = 32;
+        public const int MAX_SENSORS = 250;
         public const int HEADER_SIZE = 3;   // START + VERSION + LENGTH
         public const int FOOTER_SIZE = 3;   // CRC16 + END
-        public const int SENSOR_SIZE = 5;   // ID(1) + VALUE(4)
+        public const int SENSOR_SIZE = 6;   // ID(2) + VALUE(4)
 
         /// <summary>
         /// Creates a binary packet from sensor data
-        /// Packet structure:  [START][VERSION][LENGTH][SENSOR_DATA... ][CRC16][END]
+        /// Packet structure: [START][VERSION][LENGTH][SENSOR_DATA...][CRC16][END]
+        /// SENSOR_DATA:  [ID_HIGH][ID_LOW][VALUE (4 bytes float)]
         /// </summary>
         public static byte[] CreateBinaryPacket(List<CompactSensorData> sensors)
         {
@@ -111,11 +133,13 @@ namespace HardwareMonitorTray.Protocol
             writer.Write(PROTOCOL_VERSION);
             writer.Write((byte)validSensors.Count);
 
-            // Sensor data
+            // Sensor data - teraz z 2-bajtowym ID
             foreach (var sensor in validSensors)
             {
-                writer.Write((byte)sensor.Id);
-                writer.Write(sensor.Value);
+                ushort id = (ushort)sensor.Id;
+                writer.Write((byte)(id >> 8));     // ID high byte
+                writer.Write((byte)(id & 0xFF));   // ID low byte
+                writer.Write(sensor.Value);         // 4-byte float
             }
 
             // Calculate CRC16 over data (skip START byte)
@@ -144,7 +168,7 @@ namespace HardwareMonitorTray.Protocol
             foreach (var sensor in sensors)
             {
                 if (!sensor.IsValid()) continue;
-                sb.AppendFormat("{0:X2}:{1:F1}\n", (byte)sensor.Id, sensor.Value);
+                sb.AppendFormat("{0:X4}:{1:F1}\n", (ushort)sensor.Id, sensor.Value);
             }
 
             // Simple XOR checksum

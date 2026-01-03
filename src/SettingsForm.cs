@@ -133,7 +133,7 @@ namespace HardwareMonitorTray
             if (hw.Contains("ssd") || hw.Contains("nvme") || hw.Contains("hdd")) return "DISK";
             return "SYS";
         }
-        private byte GetSensorId(SensorInfo s)
+        private ushort GetSensorId(SensorInfo s)
         {
             if (s == null) return 0xFF;
             return SensorIdMapper.Instance.GetOrAssignId(s.Id, s);

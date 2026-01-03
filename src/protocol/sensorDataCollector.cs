@@ -39,8 +39,8 @@ namespace HardwareMonitorTray.Protocol
                     continue;
                 }
 
-                // Użyj centralnej mapy ID
-                byte compactId = mapper.GetOrAssignId(sensorId, sensor);
+                // Użyj centralnej mapy ID (teraz 2-bajtowe)
+                ushort compactId = mapper.GetOrAssignId(sensorId, sensor);
 
                 result.Add(new CompactSensorData
                 {
