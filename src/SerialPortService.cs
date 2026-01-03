@@ -32,7 +32,7 @@ namespace HardwareMonitorTray
                 Handshake = Handshake.None,
                 WriteTimeout = 2000,
                 ReadTimeout = 500,
-                WriteBufferSize = 8192,  // Zwiększony bufor
+                WriteBufferSize = 8192,
                 ReadBufferSize = 4096
             };
 
@@ -43,7 +43,7 @@ namespace HardwareMonitorTray
             PacketsSent = 0;
             PacketsErrors = 0;
 
-            System.Diagnostics.Debug.WriteLine($"[Serial] Connected to {portName} @ {baudRate}");
+            System.Diagnostics.Debug.WriteLine($"[Serial] Connected to {portName} @ {baudRate} (Protocol v2)");
         }
 
         public void Disconnect()
@@ -62,7 +62,6 @@ namespace HardwareMonitorTray
 
         public void SendData(List<CompactSensorData> sensors)
         {
-            // NAPRAWIONE: _serialPort zamiast _port
             if (_serialPort == null || !_serialPort.IsOpen || sensors.Count == 0)
                 return;
 
@@ -73,18 +72,17 @@ namespace HardwareMonitorTray
                 switch (Mode)
                 {
                     case ProtocolMode.Binary:
-                        packet = BuildBinaryPacket(sensors);
+                        packet = BuildBinaryPacketV2(sensors);
                         break;
                     case ProtocolMode.Text:
-                        var text = BuildTextPacket(sensors);
+                        var text = BuildTextPacketV2(sensors);
                         _serialPort.Write(text);
                         PacketsSent++;
                         return;
                     case ProtocolMode.Json:
-                        // JSON handled separately via SendRawData
                         return;
                     default:
-                        packet = BuildBinaryPacket(sensors);
+                        packet = BuildBinaryPacketV2(sensors);
                         break;
                 }
 
@@ -94,7 +92,7 @@ namespace HardwareMonitorTray
                     return;
                 }
 
-                System.Diagnostics.Debug.WriteLine($"[Serial] Sending {packet.Length} bytes ({sensors.Count} sensors), COUNT byte: {packet[2]}");
+                System.Diagnostics.Debug.WriteLine($"[Serial] Sending {packet.Length} bytes ({sensors.Count} sensors, Protocol v2)");
 
                 _serialPort.Write(packet, 0, packet.Length);
                 PacketsSent++;
@@ -106,29 +104,37 @@ namespace HardwareMonitorTray
             }
         }
 
-        private byte[] BuildBinaryPacket(List<CompactSensorData> sensors)
+        /// <summary>
+        /// Buduje pakiet binarny Protocol v2 - 2-bajtowe ID sensorów
+        /// Struktura: [START 0xAA][VER 0x02][COUNT][ID_HI][ID_LO][FLOAT x4].. .[CRC16][END 0x55]
+        /// </summary>
+        private byte[] BuildBinaryPacketV2(List<CompactSensorData> sensors)
         {
-            // Max 250 sensors (COUNT is 1 byte, leave margin)
             int count = Math.Min(sensors.Count, 250);
 
-            // Packet:  START(1) + VER(1) + COUNT(1) + DATA(count*5) + CRC(2) + END(1)
-            int packetSize = 3 + (count * 5) + 3;
+            // Packet:  START(1) + VER(1) + COUNT(1) + DATA(count*6) + CRC(2) + END(1)
+            // 6 bytes per sensor:  2 bytes ID + 4 bytes float
+            int packetSize = 3 + (count * 6) + 3;
             byte[] packet = new byte[packetSize];
 
             int idx = 0;
 
             // Header
             packet[idx++] = 0xAA;  // START
-            packet[idx++] = 0x01;  // VERSION
-            packet[idx++] = (byte)count;  // COUNT
+            packet[idx++] = 0x02;  // VERSION 2 - 16-bit IDs
+            packet[idx++] = (byte)count;
 
-            // Sensor data
+            // Sensor data - 6 bytes each
             for (int i = 0; i < count; i++)
             {
                 var sensor = sensors[i];
-                packet[idx++] = (byte)sensor.Id;
+                ushort id = (ushort)sensor.Id;
 
-                // Float to bytes (little-endian)
+                // 16-bit ID (big-endian - high byte first)
+                packet[idx++] = (byte)(id >> 8);    // ID high byte
+                packet[idx++] = (byte)(id & 0xFF);  // ID low byte
+
+                // Float value (little-endian)
                 byte[] valueBytes = BitConverter.GetBytes(sensor.Value);
                 packet[idx++] = valueBytes[0];
                 packet[idx++] = valueBytes[1];
@@ -136,8 +142,8 @@ namespace HardwareMonitorTray
                 packet[idx++] = valueBytes[3];
             }
 
-            // CRC16 (placeholder - można zaimplementować prawdziwe CRC)
-            ushort crc = CalculateCRC16(packet, 1, 2 + count * 5);  // From VER to last data byte
+            // CRC16 (from VER to last data byte)
+            ushort crc = CalculateCRC16(packet, 1, 2 + count * 6);
             packet[idx++] = (byte)(crc & 0xFF);
             packet[idx++] = (byte)(crc >> 8);
 
@@ -147,17 +153,28 @@ namespace HardwareMonitorTray
             return packet;
         }
 
-        private string BuildTextPacket(List<CompactSensorData> sensors)
+        /// <summary>
+        /// Buduje pakiet tekstowy Protocol v2 - 4-cyfrowe ID hex
+        /// </summary>
+        private string BuildTextPacketV2(List<CompactSensorData> sensors)
         {
             var sb = new System.Text.StringBuilder();
-            sb.AppendLine("$START");
+            sb.AppendLine("$S");  // Short start marker
 
             foreach (var sensor in sensors.Take(250))
             {
-                sb.AppendLine($"{(byte)sensor.Id:X2}:{sensor.Value:F1}");
+                ushort id = (ushort)sensor.Id;
+                sb.AppendLine($"{id:X4}:{sensor.Value:F1}");  // 4-digit hex ID
             }
 
-            sb.AppendLine("$END");
+            // Simple XOR checksum
+            byte checksum = 0;
+            foreach (char c in sb.ToString())
+            {
+                checksum ^= (byte)c;
+            }
+
+            sb.AppendLine($"$E:{checksum: X2}");
             return sb.ToString();
         }
 

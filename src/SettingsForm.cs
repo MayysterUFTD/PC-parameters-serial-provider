@@ -135,12 +135,10 @@ namespace HardwareMonitorTray
         }
         private ushort GetSensorId(SensorInfo s)
         {
-            if (s == null) return 0xFF;
+            if (s == null) return 0xFFFF;
             return SensorIdMapper.Instance.GetOrAssignId(s.Id, s);
         }
-        /// <summary>
-        /// Generuje unikalną, czytelną nazwę dla sensora (do . h/. c)
-        /// </summary>
+
         private string GetSensorEnumName(SensorInfo s)
         {
             var cat = GetCategory(s);
@@ -724,8 +722,8 @@ namespace HardwareMonitorTray
         {
             var helpForm = new Form
             {
-                Text = "Protocol Documentation",
-                Size = new Size(800, 700),
+                Text = "Protocol v2.0 Documentation",
+                Size = new Size(850, 750),
                 StartPosition = FormStartPosition.CenterParent,
                 BackColor = Color.FromArgb(30, 30, 35),
                 Font = new Font("Consolas", 10)
@@ -743,98 +741,154 @@ namespace HardwareMonitorTray
 
             textBox.Text = @"
 ================================================================================
-                        HARDWARE MONITOR PROTOCOL v1.0
+                    HARDWARE MONITOR PROTOCOL v2.0
 ================================================================================
 
+⚡ KEY CHANGES FROM v1:
+   • Sensor IDs are now 16-bit (2 bytes) instead of 8-bit
+   • IDs cannot contain 0xAA (START) or 0x55 (END) bytes
+   • 6 bytes per sensor instead of 5
+   • Protocol version byte is now 0x02
+
+================================================================================
 1. BINARY PROTOCOL (Recommended - most efficient)
---------------------------------------------------------------------------------
+================================================================================
 
 Packet structure:
-+-------+-----+-------+------------------+-------+-----+
-| START | VER | COUNT |   SENSOR DATA    | CRC16 | END |
-| 0xAA  | 1B  |  1B   |    N x 5B        |  2B   |0x55 |
-+-------+-----+-------+------------------+-------+-----+
+┌───────┬─────────┬───────┬────────────────────────────┬───────┬───────┐
+│ START │ VERSION │ COUNT │        SENSOR DATA         │ CRC16 │  END  │
+│ 0xAA  │  0x02   │  1B   │      N × 6 bytes           │  2B   │ 0x55  │
+└───────┴─────────┴───────┴────────────────────────────┴───────┴───────┘
 
-Each sensor (5 bytes):
-+----------+----------------------------------+
-| ID (1B)  | VALUE (4B float, little-endian) |
-+----------+----------------------------------+
+Each sensor (6 bytes):
+┌──────────┬──────────┬─────────────────────────────────────┐
+│ ID_HIGH  │ ID_LOW   │     VALUE (4 bytes, little-endian)  │
+│   1B     │   1B     │              float32                │
+└──────────┴──────────┴─────────────────────────────────────┘
 
-Example (2 sensors, CPU=65. 5°C, GPU=70.0°C):
-AA 01 02 01 00 00 83 42 10 00 00 8C 42 [CRC] 55
-|  |  |  |  |---------|  |  |---------|       |
-|  |  |  |  CPU=65.5     |  GPU=70.0          End
-|  |  |  CPU ID (0x01)   GPU ID (0x10)
-|  |  2 sensors
-|  Version 1
-Start
+Example (2 sensors:  CPU=65.5°C @ ID 0x0001, GPU=70.0°C @ ID 0x0010):
 
-
-2. SENSOR IDs
---------------------------------------------------------------------------------
-
-CPU Sensors:          GPU Sensors:          RAM Sensors: 
-  0x01 - Temp Pkg       0x10 - Temp Core      0x20 - Data Used
-  0x02 - Load Total     0x11 - Load Core      0x21 - Data Avail
-  0x03 - Clock          0x12 - Clock Core     0x22 - Load %
-  0x04 - Power Pkg      0x13 - Clock Mem
-  0x05 - Temp Core      0x14 - Power        DISK Sensors: 
-  0x06 - Load Core      0x15 - Load Mem       0x30 - Temperature
-  0x07 - Power Core     0x16 - Fan RPM        0x31 - Load %
-  0x08 - Temp CCD       0x17 - Temp Mem
-                        0x18 - Temp Hotspot Custom:  0x80-0xFE
+AA 02 02 00 01 00 00 83 42 00 10 00 00 8C 42 [CRC] 55
+│  │  │  │  │  └────────┘  │  │  └────────┘        │
+│  │  │  │  │  CPU=65.5°C  │  │  GPU=70.0°C        End
+│  │  │  │  ID_LOW=0x01    │  ID_LOW=0x10
+│  │  │  ID_HIGH=0x00      ID_HIGH=0x00
+│  │  Count=2
+│  Version=0x02 (Protocol v2)
+Start=0xAA
 
 
+================================================================================
+2. SENSOR IDs (16-bit)
+================================================================================
+
+Standard Ranges:
+  CPU:          0x0001 - 0x000F
+  GPU:          0x0010 - 0x001F
+  RAM:         0x0020 - 0x002F
+  Disk:        0x0030 - 0x003F
+  Network:     0x0040 - 0x004F
+  Motherboard: 0x0050 - 0x005F
+  Battery:     0x0060 - 0x006F
+  Custom:      0x0080 - 0xFFFD
+
+⚠️  RESERVED/INVALID IDs: 
+  Any ID containing 0xAA or 0x55 in either byte is INVALID! 
+  
+  Invalid examples:  0x00AA, 0xAA00, 0x0055, 0x5500, 0xAA55, 0x55AA
+  Valid examples:    0x0001, 0x0010, 0x00FF, 0x0100, 0x1234
+
+The application automatically skips these reserved values when assigning IDs. 
+
+
+================================================================================
 3. TEXT PROTOCOL (For debugging)
---------------------------------------------------------------------------------
+================================================================================
 
-$START
-01: 65.5
-10:70.0
-02:45.2
-$END: XX
+$S
+0001: 65.5
+0010:70.0
+0002:45.2
+$E: XX
 
-Format:  <ID_HEX>:<VALUE>
+Format:  <ID_HEX_4DIGITS>:<VALUE>
 
 
-4. JSON PROTOCOL (For web apps)
---------------------------------------------------------------------------------
+================================================================================
+4. ESP32/Arduino EXAMPLE (Protocol v2)
+================================================================================
 
-{
-  ""timestamp"": ""2024-01-15T12:00:00Z"",
-  ""sensors"": [
-    {""id"": ""0x01"", ""name"": ""CPU Temp"", ""value"": 65.5, ""unit"": ""°C""},
-    {""id"": ""0x10"", ""name"": ""GPU Temp"", ""value"": 70.0, ""unit"": ""°C""}
-  ]
+#include ""HWMonitor.h""
+
+HWMonitor monitor;
+
+void setup() {
+    Serial.begin(115200);
+    Serial2.begin(115200);  // From PC
+    monitor.begin();
+    
+    // Optional callback
+    monitor.onSensor([](uint16_t id, float value) {
+        Serial.printf(""Sensor 0x%04X = %.1f\n"", id, value);
+    });
+}
+
+void loop() {
+    if (monitor.update(Serial2)) {
+        // New packet received
+        float cpu = monitor.getCpuTemp();
+        float gpu = monitor. getGpuTemp();
+        
+        Serial.printf(""CPU: %.1f°C, GPU: %.1f°C\n"", cpu, gpu);
+        Serial.printf(""Packets OK: %d, Errors: %d\n"", 
+            monitor.packetsOK, monitor.packetsError);
+    }
+    
+    // Check for stale data
+    if (monitor.isStale(3000)) {
+        Serial. println(""No data from PC for 3 seconds!"");
+    }
 }
 
 
-5. ESP32/ESP-IDF EXAMPLE
---------------------------------------------------------------------------------
+================================================================================
+5. PARSER STATE MACHINE (v2)
+================================================================================
 
-#include ""hw_monitor.h""
-#include ""driver/uart.h""
+States:
+  IDLE      → Wait for START (0xAA)
+  VERSION   → Read version byte (expect 0x02)
+  COUNT     → Read sensor count
+  ID_HIGH   → Read high byte of 16-bit sensor ID
+  ID_LOW    → Read low byte of 16-bit sensor ID
+  VALUE     → Read 4 bytes of float value
+  CRC_LOW   → Read CRC16 low byte
+  CRC_HIGH  → Read CRC16 high byte
+  END       → Verify END byte (0x55)
 
-void app_main() {
-    hw_init();
-    uart_config_t cfg = {
-        .baud_rate = 115200,
-        . data_bits = UART_DATA_8_BITS,
-        .parity = UART_PARITY_DISABLE,
-        .stop_bits = UART_STOP_BITS_1,
-    };
-    uart_driver_install(UART_NUM_1, 1024, 0, 0, NULL, 0);
-    uart_param_config(UART_NUM_1, &cfg);
-    
-    uint8_t buf[512];
-    while (1) {
-        int len = uart_read_bytes(UART_NUM_1, buf, sizeof(buf), 100);
-        if (len > 0 && hw_parse(buf, len)) {
-            float cpu = hw_get_cpu_temperature_pkg();
-            float gpu = hw_get_gpu_temperature_core();
-            printf(""CPU: %.1f°C, GPU: %.1f°C\n"", cpu, gpu);
+
+================================================================================
+6. CRC-16 CALCULATION
+================================================================================
+
+CRC-16 Modbus (polynomial 0xA001):
+  - Initial value: 0xFFFF
+  - Calculate over:  VERSION + COUNT + all sensor data
+  - Exclude: START and END bytes
+
+C implementation:
+uint16_t crc16(uint8_t* data, size_t len) {
+    uint16_t crc = 0xFFFF;
+    for (size_t i = 0; i < len; i++) {
+        crc ^= data[i];
+        for (int j = 0; j < 8; j++) {
+            if (crc & 0x0001)
+                crc = (crc >> 1) ^ 0xA001;
+            else
+                crc >>= 1;
         }
     }
+    return crc;
 }
 
 ================================================================================
@@ -994,9 +1048,9 @@ void app_main() {
             var proto = (ProtocolMode)Math.Max(0, _protoCb.SelectedIndex);
             int size = proto switch
             {
-                ProtocolMode.Binary => 6 + total * 5,
-                ProtocolMode.Text => 12 + total * 12,
-                _ => 50 + total * 85
+                ProtocolMode.Binary => 6 + total * 6,
+                ProtocolMode.Text => 12 + total * 14,
+                _ => 50 + total * 90
             };
 
             _sizeLbl.Text = size < 1024 ? $"{size} B" : $"{size / 1024.0:0.0} KB";
@@ -1056,7 +1110,7 @@ void app_main() {
                     var simVal = baseVal + (float)(rand.NextDouble() * 2 - 1); // ±1 variation
                     var bytes = BitConverter.GetBytes(simVal);
 
-                    sb.AppendLine($"  [{id:X2}] {bytes[0]:X2} {bytes[1]:X2} {bytes[2]:X2} {bytes[3]:X2}  = {simVal:F1} ({s.Name})");
+                    sb.AppendLine($"  [{id:X4}] {bytes[0]:X2} {bytes[1]:X2} {bytes[2]:X2} {bytes[3]:X2}  = {simVal:F1} ({s.Name})");
                 }
 
                 sb.AppendLine();
@@ -1203,14 +1257,14 @@ void app_main() {
             foreach (var s in q.Take(250))
             {
                 // Pobierz ID z centralnej mapy
-                byte sensorId = mapper.GetOrAssignId(s.Id, s);
+                ushort sensorId = mapper.GetOrAssignId(s.Id, s);
 
                 var it = new ListViewItem { Checked = _cfg.Config.SelectedSensors.Contains(s.Id) };
                 it.SubItems.Add(s.Hardware);
                 it.SubItems.Add(s.Name);
                 it.SubItems.Add(s.Type);
                 it.SubItems.Add(FormatValue(s.Value, s.Unit));
-                it.SubItems.Add($"0x{sensorId:X2}");  // Poprawne ID z mapy
+                it.SubItems.Add($"0x{sensorId:X4}");  // Poprawne ID z mapy
                 it.Tag = s;
                 it.ForeColor = GetTypeColor(s.Type);
                 _list.Items.Add(it);
@@ -1245,8 +1299,8 @@ void app_main() {
                     {
                         it.SubItems[4].Text = FormatValue(upd.Value, upd.Unit);
                         // Aktualizuj też ID (na wypadek gdyby się zmieniło)
-                        byte sensorId = mapper.GetOrAssignId(upd.Id, upd);
-                        it.SubItems[5].Text = $"0x{sensorId:X2}";
+                        ushort sensorId = mapper.GetOrAssignId(upd.Id, upd);
+                        it.SubItems[5].Text = $"0x{sensorId:X4}";
                         it.Tag = upd;
                     }
                 }
@@ -1438,23 +1492,25 @@ void app_main() {
                 return Array.Empty<byte>();
 
             int count = selected.Count;
-            int packetSize = 3 + (count * 5) + 3; // START + VER + COUNT + DATA + CRC + END
+            int packetSize = 3 + (count * 6) + 3; // START + VER + COUNT + DATA(6 per sensor) + CRC + END
             byte[] packet = new byte[packetSize];
 
             int idx = 0;
 
             // Header
             packet[idx++] = 0xAA;  // START
-            packet[idx++] = 0x01;  // VERSION
-            packet[idx++] = (byte)count;  // COUNT
+            packet[idx++] = 0x02;  // VERSION 2
+            packet[idx++] = (byte)count;
 
-            // Sensor data
+            // Sensor data - 6 bytes each
             foreach (var sensor in selected)
             {
-                byte sensorId = GetSensorId(sensor);
+                ushort sensorId = GetSensorId(sensor);
                 float value = sensor.Value ?? 0f;
 
-                packet[idx++] = sensorId;
+                // 16-bit ID (big-endian)
+                packet[idx++] = (byte)(sensorId >> 8);
+                packet[idx++] = (byte)(sensorId & 0xFF);
 
                 // Float to bytes (little-endian)
                 byte[] valueBytes = BitConverter.GetBytes(value);
@@ -1464,8 +1520,8 @@ void app_main() {
                 packet[idx++] = valueBytes[3];
             }
 
-            // CRC16 (Modbus)
-            ushort crc = CalculateCRC16(packet, 1, 2 + count * 5);
+            // CRC16
+            ushort crc = CalculateCRC16(packet, 1, 2 + count * 6);
             packet[idx++] = (byte)(crc & 0xFF);
             packet[idx++] = (byte)(crc >> 8);
 

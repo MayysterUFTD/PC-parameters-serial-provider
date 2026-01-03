@@ -51,6 +51,11 @@ namespace HardwareMonitorTray
 
             var startItem = new ToolStripMenuItem("▶ Start/Stop", null, OnStartStop) { Font = new Font(_menu.Font, FontStyle.Bold) };
             _menu.Items.Add(startItem);
+
+            // NOWY PRZYCISK - Restart Serial
+            var restartItem = new ToolStripMenuItem("🔄 Restart Serial", null, OnRestartSerial);
+            _menu.Items.Add(restartItem);
+
             _menu.Items.Add(new ToolStripSeparator());
             _menu.Items.Add(new ToolStripMenuItem("⚙ Settings", null, OnSettings));
             _menu.Items.Add(new ToolStripMenuItem("📊 Statistics", null, OnStats));
@@ -84,8 +89,7 @@ namespace HardwareMonitorTray
                 var selectedCount = _config.Config.SelectedSensors.Count;
                 var sensors = _collector.CollectData(_config.Config.SelectedSensors);
 
-                // DEBUG - usuń po naprawieniu
-                System.Diagnostics.Debug.WriteLine($"[SEND] Selected: {selectedCount}, Collected:  {sensors.Count}");
+                System.Diagnostics.Debug.WriteLine($"[SEND] Selected:  {selectedCount}, Collected: {sensors.Count}");
 
                 if (sensors.Count == 0)
                 {
@@ -94,7 +98,6 @@ namespace HardwareMonitorTray
                 }
 
                 _serial.SendData(sensors);
-                // ... 
             }
             catch (Exception ex)
             {
@@ -142,7 +145,7 @@ namespace HardwareMonitorTray
 
         private void UpdateTooltip()
         {
-            var mode = _serial.Mode == ProtocolMode.Binary ? "BIN" : _serial.Mode == ProtocolMode.Text ? "TXT" : "JSON";
+            var mode = _serial.Mode == ProtocolMode.Binary ? "BIN v2" : _serial.Mode == ProtocolMode.Text ? "TXT" : "JSON";
             var tip = $"Hardware Monitor - {_config.Config.ComPort} [{mode}]";
             if (_lastCpuTemp > 0) tip += $"\nCPU: {_lastCpuTemp:0}°C ({_lastCpuLoad:0}%)";
             if (_lastGpuLoad > 0) tip += $"\nGPU: {_lastGpuLoad:0}%";
@@ -163,12 +166,12 @@ namespace HardwareMonitorTray
 
                 _running = true;
                 UpdateTrayIcon();
-                _trayIcon.ShowBalloonTip(2000, "Hardware Monitor", $"Started on {_config.Config.ComPort}", ToolTipIcon.Info);
+                _trayIcon.ShowBalloonTip(2000, "Hardware Monitor", $"Started on {_config.Config.ComPort} (Protocol v2)", ToolTipIcon.Info);
             }
             catch (Exception ex)
             {
                 UpdateIcon(_iconMgr.CreateStatusIcon(TrayIconManager.IconState.Error));
-                MessageBox.Show($"Failed to start:  {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show($"Failed to start: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -180,6 +183,39 @@ namespace HardwareMonitorTray
             _running = false;
             UpdateTrayIcon();
             _trayIcon.Text = "Hardware Monitor - Stopped";
+        }
+
+        /// <summary>
+        /// Restartuje połączenie szeregowe bez zatrzymywania monitorowania
+        /// </summary>
+        public void RestartSerial()
+        {
+            if (!_running)
+            {
+                _trayIcon.ShowBalloonTip(2000, "Hardware Monitor", "Monitoring not running. Use Start first.", ToolTipIcon.Warning);
+                return;
+            }
+
+            try
+            {
+                _sendTimer.Stop();
+                _serial.Disconnect();
+
+                System.Threading.Thread.Sleep(500); // Krótka pauza dla portu
+
+                _serial.Connect(_config.Config.ComPort, _config.Config.BaudRate);
+                _serial.Mode = _config.Config.ProtocolMode;
+                _sendTimer.Start();
+
+                _trayIcon.ShowBalloonTip(2000, "Hardware Monitor", $"Serial restarted on {_config.Config.ComPort}", ToolTipIcon.Info);
+                System.Diagnostics.Debug.WriteLine($"[Serial] Restarted on {_config.Config.ComPort}");
+            }
+            catch (Exception ex)
+            {
+                UpdateIcon(_iconMgr.CreateStatusIcon(TrayIconManager.IconState.Error));
+                _trayIcon.ShowBalloonTip(3000, "Hardware Monitor", $"Restart failed: {ex.Message}", ToolTipIcon.Error);
+                System.Diagnostics.Debug.WriteLine($"[Serial] Restart error: {ex.Message}");
+            }
         }
 
         public void ToggleMonitoring(bool start)
@@ -198,37 +234,39 @@ namespace HardwareMonitorTray
             else StartMonitoring();
         }
 
+        private void OnRestartSerial(object s, EventArgs e)
+        {
+            RestartSerial();
+        }
+
         private void OnSettings(object s, EventArgs e)
         {
-            // Przekazujemy callbacki do kontroli monitorowania z okna Settings
             using var form = new SettingsForm(
                 _config,
                 _monitor,
-                ToggleMonitoring,      // Action<bool> - start/stop
-                IsMonitoringRunning    // Func<bool> - czy działa
+                ToggleMonitoring,
+                IsMonitoringRunning
             );
 
             if (form.ShowDialog() == DialogResult.OK)
             {
-                // Zaktualizuj ustawienia jeśli monitoring działa
                 if (_running)
                 {
                     _sendTimer.Interval = _config.Config.SendIntervalMs;
                     _serial.Mode = _config.Config.ProtocolMode;
-
-                    // Restart jeśli zmieniono port
-                    // (opcjonalnie można dodać logikę sprawdzającą)
                 }
             }
         }
 
         private void OnStats(object s, EventArgs e)
         {
-            var msg = $"📡 Protocol: {_serial.Mode}\n" +
+            var mapper = SensorIdMapper.Instance;
+            var msg = $"📡 Protocol: {_serial.Mode} (v2 - 16-bit IDs)\n" +
                       $"📤 Sent: {_serial.PacketsSent}\n" +
                       $"❌ Errors: {_serial.PacketsErrors}\n" +
                       $"✅ Success: {_serial.SuccessRate:0.0}%\n\n" +
-                      $"🌡 CPU: {_lastCpuTemp: 0.0}°C\n" +
+                      $"🗺 Mapped Sensors: {mapper.Count}\n\n" +
+                      $"🌡 CPU:  {_lastCpuTemp:0.0}°C\n" +
                       $"📊 CPU Load: {_lastCpuLoad: 0.0}%\n" +
                       $"🎮 GPU Load: {_lastGpuLoad:0.0}%";
             MessageBox.Show(msg, "Statistics", MessageBoxButtons.OK, MessageBoxIcon.Information);
