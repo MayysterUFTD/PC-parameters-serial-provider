@@ -2,9 +2,9 @@
 
 A Windows system tray application that monitors hardware sensors using LibreHardwareMonitor and sends data via COM port in binary/text/JSON format.
 
-![. NET](https://img.shields.io/badge/. NET-10. 0-purple)
+![.NET](https://img.shields.io/badge/.NET-10.0-purple)
 ![Platform](https://img.shields.io/badge/Platform-Windows-blue)
-![Protocol](https://img.shields.io/badge/Protocol-v2. 0-green)
+![Protocol](https://img.shields.io/badge/Protocol-v2.0-green)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
 ## Features
